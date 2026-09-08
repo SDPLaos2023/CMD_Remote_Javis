@@ -9,6 +9,7 @@ param (
     [string]$FirebaseUrl = "https://uat-api-agent-default-rtdb.firebaseio.com/",
     [string]$SecretKey,
     [string]$Mode,
+    [string]$JobId,
     [string]$ConnectionString,
     [string]$DbName,
     [string]$SqlQuery,
@@ -29,47 +30,48 @@ try {
 } catch {}
 [System.Net.ServicePointManager]::ServerCertificateValidationCallback = { $true }
 
-# --- Auto check and download curl.exe if missing ---
-function Ensure-CurlInstalled {
-    try { [System.Net.ServicePointManager]::SecurityProtocol = 3072 } catch {}
-    
-    $hasGlobalCurl = $null
-    try { $hasGlobalCurl = Get-Command curl.exe -ErrorAction SilentlyContinue } catch {}
-    if ($hasGlobalCurl) {
-        return
+# Native .NET HTTP Client Helper (Zero-Dependency 100%)
+function Invoke-FirebaseHttp {
+    param(
+        [Parameter(Mandatory=$true)][string]$Uri,
+        [string]$Method = "GET",
+        [string]$Body = $null,
+        [int]$TimeoutSec = 15
+    )
+    $request = [System.Net.HttpWebRequest]::Create($Uri)
+    $request.Method = $Method
+    $request.Timeout = $TimeoutSec * 1000
+    $request.ReadWriteTimeout = $TimeoutSec * 1000
+    $request.KeepAlive = $true
+
+    if (-not [string]::IsNullOrEmpty($Body)) {
+        $request.ContentType = "application/json; charset=utf-8"
+        $bytes = [System.Text.Encoding]::UTF8.GetBytes($Body)
+        $request.ContentLength = $bytes.Length
+        $reqStream = $request.GetRequestStream()
+        $reqStream.Write($bytes, 0, $bytes.Length)
+        $reqStream.Close()
     }
 
-    $tempCurlPath = Join-Path $env:TEMP "curl.exe"
-    if (Test-Path $tempCurlPath) {
-        return
-    }
-    
-    Write-Host "[PRE-CHECK] curl.exe is missing. Downloading automatically to TEMP..." -ForegroundColor Yellow
-    $downloadUrl = "https://raw.githubusercontent.com/SDPLaos2023/CMD_Remote/main/curl.exe"
-    
     try {
-        $userAgent = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36"
-        Invoke-WebRequest -Uri $downloadUrl -OutFile $tempCurlPath -TimeoutSec 45 -UserAgent $userAgent
-        if (Test-Path $tempCurlPath) {
-            Write-Host "[SUCCESS] curl.exe downloaded and installed successfully to TEMP!" -ForegroundColor Green
-        } else {
-            throw "Downloaded file is empty or corrupted."
+        $response = $request.GetResponse()
+        $respStream = $response.GetResponseStream()
+        $reader = New-Object System.IO.StreamReader($respStream, [System.Text.Encoding]::UTF8)
+        $result = $reader.ReadToEnd()
+        $reader.Close()
+        $response.Close()
+        return $result
+    } catch [System.Net.WebException] {
+        if ($_.Response) {
+            $respStream = $_.Response.GetResponseStream()
+            $reader = New-Object System.IO.StreamReader($respStream, [System.Text.Encoding]::UTF8)
+            $errResult = $reader.ReadToEnd()
+            $reader.Close()
+            $_.Response.Close()
+            return $errResult
         }
+        throw $_
     }
-    catch {
-        Write-Host "[ERROR] Download failed: $_" -ForegroundColor Red
-        Write-Host "[HINT] Please download curl.exe manually and place it in your Windows TEMP directory ($env:TEMP)." -ForegroundColor Yellow
-    }
-}
-
-Ensure-CurlInstalled
-
-# Resolve curl path
-$curlPath = "curl.exe"
-$hasGlobalCurl = $null
-try { $hasGlobalCurl = Get-Command curl.exe -ErrorAction SilentlyContinue } catch {}
-if (-not $hasGlobalCurl) {
-    $curlPath = Join-Path $env:TEMP "curl.exe"
 }
 
 
@@ -102,7 +104,7 @@ if ($FirebaseUrl -notlike "*/") {
 }
 
 # --- 2. Prompt for operation mode if invalid ---
-$validModes = @("PowerShell", "Query", "Backup", "Download", "Upload")
+$validModes = @("PowerShell", "Query", "Backup", "Download", "Upload", "Cancel")
 if ([string]::IsNullOrWhiteSpace($Mode) -or $validModes -notcontains $Mode) {
     Write-Host "`nSelect Operation Mode:" -ForegroundColor Yellow
     Write-Host "[1] PowerShell Command Mode (Standard)" -ForegroundColor White
@@ -110,7 +112,8 @@ if ([string]::IsNullOrWhiteSpace($Mode) -or $validModes -notcontains $Mode) {
     Write-Host "[3] SQL Server Backup Mode (Base64 file retrieval)" -ForegroundColor White
     Write-Host "[4] File Download Mode (Download directory/file)" -ForegroundColor White
     Write-Host "[5] File Upload Mode (Upload directory/file)" -ForegroundColor White
-    $modeChoice = Read-Host "Select option [1-5] (Default is 1)"
+    Write-Host "[6] Emergency Cancel Mode (Abort running job)" -ForegroundColor Red
+    $modeChoice = Read-Host "Select option [1-6] (Default is 1)"
     if ($modeChoice -eq "2") {
         $Mode = "Query"
     } elseif ($modeChoice -eq "3") {
@@ -119,9 +122,41 @@ if ([string]::IsNullOrWhiteSpace($Mode) -or $validModes -notcontains $Mode) {
         $Mode = "Download"
     } elseif ($modeChoice -eq "5") {
         $Mode = "Upload"
+    } elseif ($modeChoice -eq "6") {
+        $Mode = "Cancel"
     } else {
         $Mode = "PowerShell"
     }
+}
+
+# --- Emergency Cancel Mode Handler ---
+if ($Mode -eq "Cancel") {
+    Write-Host "`n[EMERGENCY CANCEL] Locating active job on Secret Key: $SecretKey..." -ForegroundColor Yellow
+    $targetJobId = $JobId
+    if (-not $targetJobId) {
+        $queryUrl = $FirebaseUrl + "jobs/$SecretKey.json"
+        $jsonRaw = Invoke-FirebaseHttp -Uri $queryUrl -Method "GET" -TimeoutSec 5
+        if ($jsonRaw -and $jsonRaw.Trim() -ne "null") {
+            $jobsObj = ConvertFrom-Json -InputObject $jsonRaw -ErrorAction SilentlyContinue
+            if ($jobsObj) {
+                foreach ($prop in $jobsObj.PSObject.Properties) {
+                    if ($prop.Value -and ($prop.Value.status -eq "running" -or $prop.Value.status -eq "pending")) {
+                        $targetJobId = $prop.Name
+                        break
+                    }
+                }
+            }
+        }
+    }
+    if ($targetJobId) {
+        Write-Host "Sending abort signal to Job ID: $targetJobId..." -ForegroundColor Red
+        $abortUrl = $FirebaseUrl + "jobs/$SecretKey/$targetJobId/abort.json"
+        $null = Invoke-FirebaseHttp -Uri $abortUrl -Method "PUT" -Body "true" -TimeoutSec 5
+        Write-Host "[SUCCESS] Emergency abort signal sent successfully to $targetJobId!" -ForegroundColor Green
+    } else {
+        Write-Host "[INFO] No pending or running job found for Secret Key $SecretKey." -ForegroundColor Yellow
+    }
+    return
 }
 
 # --- 3. Build script payload according to the mode ---
@@ -592,21 +627,17 @@ $jobBody = @{
     script_content = $finalScript
     status = "pending"
     created_at = (Get-Date -Format "yyyy-MM-dd HH:mm:ss")
+    timeout_sec = $TimeoutSec
+    abort = $false
 } | ConvertTo-Json -Compress
-
-$tempJsonFile = Join-Path $env:TEMP "sender_payload_temp.json"
 
 Write-Host "`nPublishing job payload to cloud command board..." -ForegroundColor Yellow
 try {
-    $utf8NoBom = New-Object System.Text.UTF8Encoding($false)
-    [System.IO.File]::WriteAllText($tempJsonFile, $jobBody, $utf8NoBom)
     $putUrl = $FirebaseUrl + "jobs/$SecretKey/$jobId.json"
-    $null = & $curlPath -s -L -k -X PUT -H "Content-Type: application/json" -d "@$tempJsonFile" $putUrl
-    if (Test-Path $tempJsonFile) { Remove-Item $tempJsonFile -Force }
-    Write-Host "[SUCCESS] Published successfully! Job ID: $jobId" -ForegroundColor Green
+    $null = Invoke-FirebaseHttp -Uri $putUrl -Method "PUT" -Body $jobBody -TimeoutSec 15
+    Write-Host "[SUCCESS] Published successfully! Job ID: $jobId (Timeout: ${TimeoutSec}s)" -ForegroundColor Green
 }
 catch {
-    if (Test-Path $tempJsonFile) { Remove-Item $tempJsonFile -Force }
     Write-Host "[ERROR] Failed to connect to Firebase: $_" -ForegroundColor Red
     return
 }
@@ -626,7 +657,6 @@ $script:printedRunningHeader = $false
 $script:checkUrl = $FirebaseUrl + "jobs/$SecretKey/$jobId.json"
 $script:isReceiveFileJob = $isReceiveFileJob
 $script:OutputDir = $OutputDir
-$script:curlPath = $curlPath
 
 function Process-JobStatusObject {
     param([PSCustomObject]$statusCheck)
@@ -656,7 +686,6 @@ function Process-JobStatusObject {
             }
             $newStdout = $stdoutVal.Substring($script:printedStdoutLen)
             Write-Host -NoNewline $newStdout -ForegroundColor Gray
-            [System.Console]::Write($newStdout)
             $script:printedStdoutLen = $stdoutVal.Length
             $script:lastActiveTime = [DateTime]::Now
         }
@@ -669,13 +698,12 @@ function Process-JobStatusObject {
             }
             $newStderr = $stderrVal.Substring($script:printedStderrLen)
             Write-Host -NoNewline $newStderr -ForegroundColor DarkRed
-            [System.Console]::Write($newStderr)
             $script:printedStderrLen = $stderrVal.Length
             $script:lastActiveTime = [DateTime]::Now
         }
     }
     
-    if ($status -eq "completed" -or $status -eq "failed") {
+    if ($status -eq "completed" -or $status -eq "failed" -or $status -eq "cancelled") {
         Write-Host "`n`n==========================================" -ForegroundColor Green
         Write-Host "CMD_Remote Output Report (Status: $status)" -ForegroundColor Green
         Write-Host "==========================================" -ForegroundColor Green
@@ -685,13 +713,11 @@ function Process-JobStatusObject {
             if ($stdoutVal -and $stdoutVal.Length -gt $script:printedStdoutLen) {
                 $newStdout = $stdoutVal.Substring($script:printedStdoutLen)
                 Write-Host -NoNewline $newStdout -ForegroundColor Gray
-                [System.Console]::Write($newStdout)
             }
             $stderrVal = $statusCheck.stderr
             if ($stderrVal -and $stderrVal.Length -gt $script:printedStderrLen) {
                 $newStderr = $stderrVal.Substring($script:printedStderrLen)
                 Write-Host -NoNewline $newStderr -ForegroundColor DarkRed
-                [System.Console]::Write($newStderr)
             }
         }
         
@@ -738,7 +764,9 @@ function Process-JobStatusObject {
         Write-Host "Exit Code: $($statusCheck.exit_code)" -ForegroundColor Gray
         Write-Host "==========================================" -ForegroundColor Green
         
-        $null = & $script:curlPath -s -L -k -X DELETE $script:checkUrl
+        try {
+            $null = Invoke-FirebaseHttp -Uri $script:checkUrl -Method "DELETE" -TimeoutSec 5
+        } catch {}
         $script:completed = $true
         return $true
     }
@@ -746,66 +774,83 @@ function Process-JobStatusObject {
     return $false
 }
 
-# Main Listening Engine: Dual-Engine SSE Push Receiver
-while ($stopwatch.Elapsed.TotalSeconds -lt $TimeoutSec -and -not $script:completed) {
+# ดักจับ Ctrl+C เพื่อส่งสัญญาณ Emergency Abort ไปยังเครื่องเป้าหมาย
+$senderCancelHandler = [ConsoleCancelEventHandler]{
+    param($s, $e)
+    Write-Host "`n`n[EMERGENCY ABORT] User requested stop! Sending abort signal to remote agent..." -ForegroundColor Red
     try {
-        $request = [System.Net.HttpWebRequest]::Create($script:checkUrl)
-        $request.Accept = "text/event-stream"
-        $remTimeout = [Math]::Max(5000, [int](($TimeoutSec - $stopwatch.Elapsed.TotalSeconds) * 1000))
-        $request.Timeout = $remTimeout
-        $request.ReadWriteTimeout = $remTimeout
-        
-        $response = $request.GetResponse()
-        $stream = $response.GetResponseStream()
-        $reader = New-Object System.IO.StreamReader($stream, [System.Text.Encoding]::UTF8)
-        
-        $dataBuffer = [System.Text.StringBuilder]::new()
-        
-        while (-not $reader.EndOfStream -and -not $script:completed) {
-            $line = $reader.ReadLine()
-            if ($null -eq $line) { break }
+        $abortUrl = $script:checkUrl.Replace(".json", "/abort.json")
+        $null = Invoke-FirebaseHttp -Uri $abortUrl -Method "PUT" -Body "true" -TimeoutSec 5
+        Write-Host "[SUCCESS] Abort signal sent to Cloud board." -ForegroundColor Green
+    } catch {}
+}
+try { [Console]::add_CancelKeyPress($senderCancelHandler) } catch {}
+
+# Main Listening Engine: Dual-Engine SSE Push Receiver
+try {
+    while ($stopwatch.Elapsed.TotalSeconds -lt $TimeoutSec -and -not $script:completed) {
+        try {
+            $request = [System.Net.HttpWebRequest]::Create($script:checkUrl)
+            $request.Accept = "text/event-stream"
+            $remTimeout = [Math]::Max(5000, [int](($TimeoutSec - $stopwatch.Elapsed.TotalSeconds) * 1000))
+            $request.Timeout = $remTimeout
+            $request.ReadWriteTimeout = $remTimeout
             
-            if ($line.StartsWith("data: ")) {
-                $null = $dataBuffer.AppendLine($line.Substring(6))
-            }
-            elseif ($line -eq "") {
-                if ($dataBuffer.Length -gt 0) {
-                    $rawJson = $dataBuffer.ToString().Trim()
-                    [void]$dataBuffer.Clear()
-                    
-                    if ($rawJson -and $rawJson -ne "null") {
-                        try {
-                            $sseObj = ConvertFrom-Json -InputObject $rawJson -ErrorAction SilentlyContinue
-                            if ($sseObj) {
-                                $targetObj = if ($sseObj.data) { $sseObj.data } else { $sseObj }
-                                if ($targetObj -is [System.Management.Automation.PSCustomObject] -and $targetObj.status) {
-                                    $isFinished = Process-JobStatusObject -statusCheck $targetObj
-                                    if ($isFinished) { $completed = $true; break }
+            $response = $request.GetResponse()
+            $stream = $response.GetResponseStream()
+            $reader = New-Object System.IO.StreamReader($stream, [System.Text.Encoding]::UTF8)
+            
+            $dataBuffer = [System.Text.StringBuilder]::new()
+            
+            while (-not $reader.EndOfStream -and -not $script:completed) {
+                $line = $reader.ReadLine()
+                if ($null -eq $line) { break }
+                
+                if ($line.StartsWith("data: ")) {
+                    $null = $dataBuffer.AppendLine($line.Substring(6))
+                }
+                elseif ($line -eq "") {
+                    if ($dataBuffer.Length -gt 0) {
+                        $rawJson = $dataBuffer.ToString().Trim()
+                        [void]$dataBuffer.Clear()
+                        
+                        if ($rawJson -and $rawJson -ne "null") {
+                            try {
+                                $sseObj = ConvertFrom-Json -InputObject $rawJson -ErrorAction SilentlyContinue
+                                if ($sseObj) {
+                                    $targetObj = if ($sseObj.data) { $sseObj.data } else { $sseObj }
+                                    if ($targetObj -is [System.Management.Automation.PSCustomObject] -and $targetObj.status) {
+                                        $isFinished = Process-JobStatusObject -statusCheck $targetObj
+                                        if ($isFinished) { $completed = $true; break }
+                                    }
                                 }
-                            }
-                        } catch {}
+                            } catch {}
+                        }
                     }
                 }
             }
+            $response.Close()
+            if ($completed) { break }
         }
-        $response.Close()
-        if ($completed) { break }
-    }
-    catch {
-        # Fallback polling check if SSE connection drops
-        try {
-            $jsonRaw = & $script:curlPath -s -L -k $script:checkUrl
-            if (-not [string]::IsNullOrEmpty($jsonRaw) -and $jsonRaw -ne "null") {
-                $statusCheck = ConvertFrom-Json -InputObject $jsonRaw -ErrorAction SilentlyContinue
-                if ($statusCheck) {
-                    $isFinished = Process-JobStatusObject -statusCheck $statusCheck
-                    if ($isFinished) { $completed = $true; break }
+        catch {
+            # Fallback polling check if SSE connection drops
+            try {
+                $jsonRaw = Invoke-FirebaseHttp -Uri $script:checkUrl -Method "GET" -TimeoutSec 5
+                if (-not [string]::IsNullOrEmpty($jsonRaw) -and $jsonRaw -ne "null") {
+                    $statusCheck = ConvertFrom-Json -InputObject $jsonRaw -ErrorAction SilentlyContinue
+                    if ($statusCheck) {
+                        $isFinished = Process-JobStatusObject -statusCheck $statusCheck
+                        if ($isFinished) { $completed = $true; break }
+                    }
                 }
-            }
-        } catch {}
-        if ($completed) { break }
-        Start-Sleep -Seconds 1
+            } catch {}
+            if ($completed) { break }
+            Start-Sleep -Seconds 1
+        }
     }
+}
+finally {
+    try { [Console]::remove_CancelKeyPress($senderCancelHandler) } catch {}
 }
 
 if (-not $script:completed) {
