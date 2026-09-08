@@ -1,17 +1,813 @@
 <# :
 @echo off
-title BB_JAVIS Command Sender
+title CMD_Remote Command Sender
 cd /d "%~dp0"
-powershell -NoProfile -ExecutionPolicy Bypass -Command "$s=[scriptblock]::Create((Get-Content -Raw -Encoding UTF8 '%~f0')); & $s %*"
+powershell -NoProfile -ExecutionPolicy Bypass -Command "$s=[scriptblock]::Create((Get-Content -Encoding UTF8 '%~f0') -join \"`n\"); & $s %*"
 exit /b
 #>
-$c = '7V3/d9s2kv897+V/QFm9M7Vr0l/yzXUvt5ElJXbrbyspze65fjIlwjYTilRJyo7by/9+MwAIAiQo0Ymz295VyUskEhgMBjODzwxAcO4l3ozYjx8R+JylWRJEV+et10FCJ15K3yYheUls530cRMQ+m9xl9Oz8/JW983z9xVP2d2f9xYv1p+tbL/Dvi2fr3z3Dy1vfsS876zsvxPcd+HdrfWczv7vJfu6wYnB3W1x/wQjj3e31redYACjARSgMV7DwC1bxxfrOFhb47gl+2XkCrbfJ/5DXcdL3ptfOyeQ9nWbkN3I2vfaSc7s1Js7kY5yQ59tt8qndXi/1d0inCc1+pHflG0exT8vXunEUAfUgjobsSvl+b3LszSq1hr+Ef1/QpNICXH8dhJXiJ4tsvsh6QVK+cRhPvfDUy67LNwZ0FmdUvRNE2XlrFMxovMighzCSTzY3Hz9qP370+NG3KKspJdM4SuOQkpi1R2g0jX0gR7KYvB29dnYePxKs9PM7L8nZ8C7N6Mwd0Y+Zm18/392FClD+rMtJwoV71kSu+pE3AXZGh0Oy5W6TlE4XSZDdkXkSZ/E0Dh8/ypI78pvooSB3TDN3SJObYEpPQVOzIy/yrmgChIei/qmozmTwYhu0AZThxfMd/mXru+3Hjz6RqZdNr8lvn6APDQgnNzTp0iQLLgOoSH/ywsD3UCu6XhhOvOkHaOs30sqSBSWfeOccxyGdBYh2ek3hvhf5xI9vozD2fAJ8hi79SElwSWZBmqLAoPzjR5eLiCkbiCZdJNTpQsGDKM2gFernkmBC+QJ5qJ1Hevzf1rWXvgnjiRdio1C2FS3CUG2xUuINzZxuPJth32SXnH6SxEmHd2MI2h5l4R2oSRZEKJxS2yAAW6fbzruJHzDURRLx30yujFPo9hyLov4DGz9Atx32vUWjm91R/+iUWDk/VtHOiKaZKKdSWNZgIZ53IEnq7MdpRqyz00Hf6e73uz+eK0OZ5kPpkp4YaBxXD3RgBroClhzeoakhf67rWsQBq6RXSbyI/G4cgmr+k4ZhfCs6mSsLd8vWdZbN092NjcS7da+C7HoxWaQ0AYvOQMDuNJ5tDHunh16cbm9uP9noHvXG3EdszLwg2ihJQxnVoustJNi5AnLY3lH8axCG3sYzd5PY74II2EnJ8Yhsbbqb3xO48Pzp9+Tj86dt0pnPQ/qOTn4Mso1nT164T54T+8f90dHhOgmDDxS0ZPohbpPudRLP6MbWNhDAP2ToXXpJIKpYBR8H0U38gTpAcUB/WcCYEedtEugCccDboCct6YKjOMCnz6Ce7FHRuaKhpjpRGf7h2263Pxwqg5/zBkaKxhBIk00X0ylN08uFMvjfGIb+TUJpVDT5idAwpWUmMhDhLbF6RWOXKAPQPGAd/CbQmcZJsphn1HcViX7S9FkYYHFb61t/MDgZnEsNJpceNOHvktbYwPWA+jVk9g+OR+fkNKQALAx+D1zGgtkDSmseejA5BRmIjdzFi4Tk6sYs2Qd4Ms1i0FVbmnd7lfVAV5m7MLlR7p4HFOatG8pYInMYcpj8poVPUf1HnWf8Ol4RtdKJ4ozUuEWVy1Wej8kA/6hj87LxxyDk7p0X6eRI4WtI3u0hjXyaELtzwAa4t0cQW7Ub0XsA9nB8D1HfQg8oTiWEQ2DBLOaSWUp0Q6MAQBCFIRZ3lsp15o8T1s+xPxmLCu77NI5QR3x66S3CDPEiqo/FB1JxL0oLbW0mVzywKNPzMk8qEnPwWnXiDLxbAMBd7EGSvQa/6vwAbCiEdG5Uum4Z0QqDUTRQATBbLgH0AM6FiYwjZwLQGX0n6igQvgnQETH0gj3OIeru7kF6DGZykry7hsEdzsHG7QJ7twt9lteA0wH1fKEHfeg4NAmQnvpKy1yrP6slk5+r0Jfe1CUdgIsZzufLPF8OGJjQGJpR4yk0ZDYJWn/ZsIou6yGX9vOvxNqwtDHY1sYgntOEIU8yA5PCcQiiG4SjfAha7DtaWwqUX9nWaXxLk+E1+EZrnVgsKsEve4BZF3P8lnt6/P52zr61mwiYWTRxgCW1TewwghIAHSkRZQziv4iGNMSo7UR2B8vurnDr2ghuwfwiOyddD5Ih9jCD717im1wO64SB3jZow98PCQf7hElKUBuwMU7JD8OT4/tQfKJR5CIXJPdguJ8/5fM3qFASUBDifWg/PScMAMmJmtOVP+W0uYFt3IfyM0GZK4OgK37ci2oLNbR7HUNkopu2GPt4zgb+bMuBJu0ed1lof1ttBbWrVBz6C7G2LQ2dMSVDl8t1O3dniJ+M1Z/UVBcWsbL+05r60o5WUnhWQ0FYn1rfWE4xaR3tcH/xxCV7iyAE7DlNAvAac++OjZ03BXCYx/vZNeUOhHuNyyDywiEvz2evVpAO6JQGNxSV4Yd4go7q0gOepKNj/LAeKRzJrn1LciOEqZbbJoCS6QLHvBjdFU5c5FHamsAkQlpZGVkHH4Vtq1NxfqeC8mWD5dlX1AAYl+c3MIvBJuJVoF2lqdjARcQnOMWF5WKC4eGSorUY/nNFpxn6u87g+OD4zbn0nc2mPtUhqzOgwl5JnyQzTE+lXRT6w01XVR1wm78woTEltXlySXjgpiIoI52qFqk4aWnIl49WQZJwmsQ+TSC+I/w2jNwC4x1OdVfDYSZnWRYlk12ZbV1vKhxYevUvFcsyNtTu6DU+rbSC5b3K5atMl8s6el9jWN5lEy6sDvQ9cWGNZUgF926oGplw9vMAhZd69RsxDULl2qciFhjFLBKAC2AxDs+QaJGD9F+L7HKHsT+lMq+W/hLmHo9PAs2k+y/30hqfD+WnjfCU6SN3Y8N4AbJahVCNOgVItVBvMStzJBXeLYdQRnIAVFl0ewlRASPJUKTtglhWIDJNgk2A2fa5wb0otU2ATG1ExNOVsA4TLugtkWfGvlWtX4qfBTVjUyu0ImdkqVYs1w7jQOQxZD4EqO2XKPiVnkH9qF5CY6TkYmv50nteDaGBvRxa2NS9csmwf9jvjsirVz/1B8MDjGnqvXktGtUaVWZ4Uaup8yjIrHbKak+kO76nE84dcD+denNKMF8PI/fLIs4gesUAWwFkwimHwEniMXwGehtMArggOtqijIyfJ1rKvtkdUJbdtK01jK/X1qy2XhHkhvUKKRhr5Ey/oRGGy5R0eifucX8kMJLE1cK5GEHYKxjkC9M0vKZ2Yg0LcabWFB7XkAclW3XRUuaul+SY3ubLsGJViqWaoGI3DLBTQ9Y/UcGustGuknVP5jSylRt83F/qhboJBXkIAFsp7YobuATJagIf6jx80fJ8b45G0qwPeKXDa9iyEdmoD3dTmtXTwn+GNCu17cKMFdqyeltM3sdy9S0vn7HV0pdFS+4Ir6Rnm+eFtYlimi1dtACjAm5j0OBlGSs4BxFga8Fu3orTo3PwmE8IprLnCHHLpskhuUa7zldoFdZ+s9LMyxaptWuJ1RFr3ZrBf94VhWtdLVgsLaG45DgGi8ZANhWWjUsdn9aKQFhf37ho0SQ5FREwGIHCFecCkQ5f41CcIMVk/Ti7m7N4G9zO+O9v+4N/jpkfUsoJrtmYjN3+xyllM6d7xK/n8qjAs5JQuXzYCoHGML9LPwYZ2cKeMYMOpRHy4VYMkUEozTwgBM/ELI3mZJXUQjWkME5pbkA8oWC9qovXRK6kSGiakgW4GF4CveC/UXUx10kmPB2G8d2fAd2fAd2/MaD7TATxewzhVkuOb1jS5SUumkewlxtshEXAIEQem0NJBOi9vbZ1z/EzcWFchtYa/7IRW82V3IdVEo+8bpaQ2E5VLFSDkFJUDiEpHp4xcfV2f+YXexMVdH82axX22Hrl22F/cDo4eX1w2DeZ2DII/AWwthakll0+zlK/BnOGp9HXPhxwlXpsia+sqr7aZqm/2X11AdIqfrF7MJcdIHCwLphk2Vp3/+hk1B//cLI3PuixQuq+gUq57tvB4fi0M9q3Shi64/vOCCGG00lTOpuEd4x5SyDGgxO3WwgIQSLld6zSZoIsnldgz9mAXoZiZs+pg2Zh2uBdkF2fekkWeCG2Z69uT0ekTIHkPrW3cxhd6pwm8RWbNkX7c3WnKWNIaPdF6/TaS4V3lMg5CwBJZd5sLiL3HkMtYOIzD+zsDj7O0ZHj+2R/f3c22wXEmNecxP5dCdfNBS/jObbEsJnSJn5wW8D4moIQJhA9sBKSg6aYTYVgXEly9GXaQnTRWjBBCRW8aGnLxO338STdwIvFqjX7yQi38z0GBTHcfwJ0/kNpjjgpcQ6J84E4/yCgbt194uwzdIFRJVO0XeLN5yFuYISR22BEiePnQlRYVEGgMta5ABzuwtjUtHq8ed5M2faq3/7vgBEqKQS4BzBzCjSLfaSgoFgS1JgHfbasLKt5yfQaQKgxAivpN1Tt8NK20ty62pq5OKJgyYNsGWTMVngkDyIy7eN1WyGKYwXVQcuRc2aBqozakuItTocJI8mIa/FwXgja8FmhqpCwOE5WOnlpN4vLy3LYy3d8k52t77Y3ebnbazZ12bwhxgtv0RWUOZl1srkuabqHNLoC9W8T5yojmyUz4L1y2Vxfro+kiwCk2k09RpG0Sldz+feCdK7dkINc1GD6fdES+hyHvhQ43/RT3KxsDCrVYiYtUM0Yvle82Bp6saMj3x/v789mabrWdifeBzZ9gG4J8lU96V570RXtfwQjTnnqpOAHZl4XOsXnXmViKftkh7k/FsfmkOQgkrelK/0jZnSsvU73x7enpNcZdfY6wz45y0HAORmdkN7B8EcECqrU1si7g9E+eX0yOOqM1snB8cHoe6vcSp8nH47jiGU17WpSxhw8Lx8AGGiiOBXDKOg5b6kaYEQEt9jdUOcAxqK4IeB/bi8mD+0U1k80bXaE9yyoreJfbFqRAYhJi9CJpEaHhC6jE4Z7WMAuuiYrcuJQU0y8UGUU8ya5StmC+ko5840UyOGA5aaswo+kq3JBCEpDmmnpIATw44gjy1WuXO+WrO3zLX15N++HMrT8meU4DiL7Mer8eDjqDEZwxTKUVPu7klD/uMfJfKUEGjfU32EGTTW3wjqqFqdajmZ0X2CzS5NsckPRfdNszKjlnuv7JNiKx4pKEXBxwxwC5+t5Yh8wqvyGsnFbXGaE75sqqOPJlC5Q2vnDJQvKu/p/hwkDGdknxTBXInmc0sVEkSVelCLMXBnda/q1pvxc+30F8CpYU7Gg3CW+ltvdGB8nQXhWXjr7M+z/M+z/I4T9DQKKLj7ZiDBr5CVXNGPP1CDWVMAs2wGkTY91/lw83CRIMdcCnvqSh1dyZ8WuRsEquah/G/A2E1G8GrvEzL7Ld8fTROt9fdpBy3ngsx69fOqw1RbWSRl7Vtdt7pNXKYHYf19uhbfOUiDHzSC4omEVErUpGqUJrdbSNAwv0iwJU8NVs0QMfh46GaP2b2VCRphZudN68kWjaLhTk5opqWZlKfr/ZlDKYPq/MjJVFBCfMmKpoz+j1CJK7Z28Oz486fR+5zHqQ4WX+bNexaZ7Fjcu5veOGuUpFaVISF5fHjOyYpWQkV/9rIix4Ic9nlaGIHX8mgJKzgVHNbWY5GtFmA8VjWccUv0Bo/BvySlNLiEeICEbCCXOVG0q770EFbhpk1UQzz41OG4BwzVTbFeEdrbFbWNsgfs8e7MIfJAVzNr4zW67o1hMCG13uJhwYdowje4U3lZbvCk9+/vZYWHufornd430S7upC9tchUzx81noVDm9RhOviijMW4saodQakozA52HVB4GqrP3maFVxRiYamKAxoVUjWGXVJF6tgausUBPEWs9Zc8iKnxy25qhVA60q3mwIWZVeCtSqESlhVqZlxt5XAapK2XxzCYBl92swrGCi+PEtGQa/UnK18BI/AVRCbuSBQoqbR2pY7CVhy4lsmte0XohKN3JZDcW39WzzaK8iQsPBJzWoQnOLesibf0wzAMbbbLZMkRGYA1r22RFX/gH6X8nkxtbR3jrZbrfxP9AU8GAU8BX1U5InSkjqXdLsjoTBDBBSfMn79I18CksglkaPXJQftdAGRe2IjCbyh2fZvjcWC4gdUCtnFDaEDQOPGl/WJPyQ0Yei6Y1OeHnN0DB2LJ9V+WEs3vQDgl0cvrTJsS8PpkyGp+VKUPjBmluS05YP4xO+CT1LvGmzRyuW57D5oImTPdbEyK41ySgL1KHkky9Y1/qcN57GN1a1LcH/vSFLeUuBEkIXmojTfSkULnopNLKq+EwXqyH3OrnQVLkIjFGMvJPDeRgYkmvLso2yeruUmBW5VJzCmLawfxkMkgiGVIjI3baKjipo6wty+6Zz0dR+6ANeDf5KCiHU3RngEXCp1PuVOE6QGMVqklEZoRIb+lAJZaM+Ekvzh/Bg+veNTKqpdL0qMLeIMhamblWeC61Jqx5S73L5KUvVpwVq0tIV4aoNVtxWN57f5QX1bpxtnruvQc2YDhio1KVpC4q2atalIbb+ArF7VTflmGtKqqdUxGEeKFg2S/sULtzN8FE+mWTSHrv5pppxUbMZVq8gkJ8XZkyVWF8v1/F1jKbIoBTnazx1CXhLBCPv4wk7kYDMaOax3JkCFyR+4SdsvM/XIeGLc193zOvv6YteKVs0Gn9gy57FEpK4yeam8bR4QlOZskQRmRgDyO8Xz2NMWZzhj9kSWXUjm3FdDvfSLU2AQQ9Q2niZpZlqzthK2cFhYyFGPueJZTD9lLCL6HQxCYP0GkEajoMi+WkYL4pDRyYxgOzlcE2Z6Fr4UMVxvBfPjMEjO8sUHx7OAaLNz0RZOdthRVsTAcQqYkzXlVbzx0PBTs2HQ7E1w2K0N7hiqWuFxTJhzSrh21HTNULrlcaylfNlMjetpBGLycHXrdZ8tKIY3rIjIrjr5aC3S3i/609SBOKav/oazBqQNNsSqJr/KgitnR/GHcwzF4/OSTIIeUCbIp7NiufEli5lOOyDgNJr0o+ugoiCXrwBJ0ZBROQ0DkOs8VocTNvm/ke3nUNJGC3k1gtYIIVPPyuH+fGDM8F853EEbda23l5uXK00i+e3bCiKOKgXeFcRMBNMU3eY38cja7HfYHYYObe4D9stpiT1BKL8Li7q7+dr+j954YLl8i29ACKCG4qHgyIP6M7wOzpfzmFR8lRsHrAstZE5uGJgYJj58SKDoBsKbJru0iSpuztYRCjw/TzzkvdE9hLX0j/H5HMCpr1h5WtFaW0LkPyhsFPsiJFeRNsBcprEaJUOUB2yiSQ/hpurNdsJYp+dDrsLGP8Zv3ne4nMO2zegHOPDj7tU74FFcsMQctLBdktOXWoll38XRYDpBPR3X9nuoRXWN4PolXIl0Cro+0tUdljWpdIew62Gy2Cu9bqr5/mXqXiFsrnecs2vhDFqV7gUtG6IS6UusKu1nEthqjTMqYmL6IyX5hp1vlslVHvm5wN1Xqii2aRKfWTeAMajqod4o5SVK0pzicrfIonH0nV1/saYwdNYNXkZY+q0JG9xfjvJD9iyB9QLHdwW1T43nXVjOExGlXqdsys2qeafclI2ore8u1yauXAKIFwrm9p0pHMcw1QS4gSpkDcABu/OvNxRHG4vEs2SSjnxWz9PVAbaXLOZupYEpysjTD5mZYQbVWUUpaUy8t/LlZFPb/9vlBG6KwZQCGeZMgrZ3EMZkXylSz0v+VBJW6/QRyC0Uh8lMqmM9QPpY3UaEZM022xQ7F3hJ8aq98S2jNpl5YvoIvqiQ6FLZ6urtBW4K5IjAzqPAXrbfArazVk1HfawhO5D8qvbbvMJig9n00lKGbaHnKgUc/py377SpBr69wY2VfXxZR/R2OOqkn1Ar6tI9ssd1UrJNndWDYRbdVjVE8fwU561agKdXJomd2OcrAyGQJwZC1HXjPvWzn5Ofo7O/2r/7T8x6Pqvs5/Tn4fnf/1bW1w3bFFbM48XVsfD22G0jrA9mp6t4bW1c3eUBLPygjJ+Svs4NHJzueOtfBa8fqpT3m4NmUuxGwHZynfMyJ2FS+qI1Sy9DuZBzXXMV03rNpUo1XykjWSm+WJONf5Vc/Hlz6eazv9q2ihUoSzlWkNl4n1oQGX5w+P4WAeob/GAsGy0bdCl+lEoITFUZzLojwYH/Z86h+ekR8V6uFgEx0FutgSu97jBIqLUrBr+V60o5oOzTrT1xPuL4awz6O4f/NQn/X+MBp3u6JyItQKWNxM7jNg7IO4tiCU2jZ8v3AtW/pTXFpuJopQwFcpayZXmSlyz4lj+fM4KpDKiFb/wBT36tWbbwK9Lt7ssb8Kcy36tnPIv3hDko0FVVtlWYsG6tgR4Rb535Zg0j5gMfazsIantZn5UU+4ioBll20Tz9wfVMFN/7qmJiyPxNrV8ZmSrch/o6v2npZaNKKS625TnpT08GU5HFRKBjL3MHDuooFTbeoSLo118GUaZJi6bjqc1L9KpJ/h1YhFllamcMlYXm3r9w/6oX5QRWe5qvk7L8usRep4JLq5qwaaWKJYLKUdeEJFinYMvVeyS3sILHbFqItcxBJ4EzC42KxZrFm4/9OYp9d1RnHnhEHQ88qF7IWAq5V1jDIFqkZnsTu27fhLxcrOX2pv89rNsXrz5TNntWhJgu0rJ7UxxuR0XLzIwwA3wNVHmpGw/oqUVnwnWsW2xLe/I+2g/29zcXOdvkrRtrXtkhUDa5C9kC2q3TWwVjSlNG8rhjjimtysqaFXF4tTLggyAo4G4rMLpVprvKJa11KJ826at8y8SRsY9xLzCgJWxBfFi27DpnZdtYxfQQe3lG2q16hwPsVd5sNc5RnxZrEpDKC3XP7G5tR/5J5diE3UT7ZT8sKBP36V7CJfKkQkLo5gLwICL1cKJdALVPpQ9uKEmlnfZYl+KCNa2UAy7xKo5ulL4GkVYbmeOuxYYa4KajHmfl6FviR/5MAzrKwsYzSeY8xNFizaVMN28L5kxm3i34qBdta6yuaMu0sPP2U0c+OdqxW5IvaSueD3QkWzw6Fj+gh5bKE5zj/PPCoDK+gnQFKxidewpm162OWt5WzxoZ+0tZVvyxh954ewplV2UK+qp+lsiDNmlGshX4ahoxQlSabz8Bay4GcrtiHd/AsItrYSKYZEUxOJlo96xHgbp6yDiGyRe1i7GOgp8UBpr1gTrYtEME1tllv7ebPKmz4oiS26vCmAMl8sg0ojsipmgsl2fL4QqblLvZ91G62/lvgsyFxsx+Ot/gR7CDeWMLT+J58qh2gaLU7JFy1BWPbbKO1LzGo4+Pphl562IN3DIRld4ChWZNs4/3dcHlJN19U73M8xB+bHEjX6BASzRQYNCr9A4/LAJ0xmGlM6Jk2PRLamR8hWEK+b68uJK8SKoAi/jopuPh9VgOBfFxGObgeYL9lJbfHnY+3hSG1N9+l8='
-$b = [Convert]::FromBase64String($c)
-$m = New-Object System.IO.MemoryStream(,$b)
-$d = New-Object System.IO.Compression.DeflateStream($m, [System.IO.Compression.CompressionMode]::Decompress)
-$r = New-Object System.IO.StreamReader($d, [System.Text.Encoding]::UTF8)
-$script = $r.ReadToEnd()
-$r.Close()
-$m.Close()
-$sb = [scriptblock]::Create($script)
-& $sb @args
+param (
+    [string]$FirebaseUrl = "https://uat-api-agent-default-rtdb.firebaseio.com/",
+    [string]$SecretKey,
+    [string]$Mode,
+    [string]$ConnectionString,
+    [string]$DbName,
+    [string]$SqlQuery,
+    [string]$SqlFile,
+    [string]$OutputDir,
+    [string]$LocalPath,
+    [string]$RemotePath,
+    [int]$TimeoutSec = 300
+)
+
+# Force console output encoding to UTF-8
+$OutputEncoding = [System.Text.Encoding]::UTF8
+[Console]::OutputEncoding = [System.Text.Encoding]::UTF8
+
+# Enable TLS 1.2 security protocol
+try {
+    [System.Net.ServicePointManager]::SecurityProtocol = 3072 -bor 768 -bor 192
+} catch {}
+[System.Net.ServicePointManager]::ServerCertificateValidationCallback = { $true }
+
+# --- Auto check and download curl.exe if missing ---
+function Ensure-CurlInstalled {
+    try { [System.Net.ServicePointManager]::SecurityProtocol = 3072 } catch {}
+    
+    $hasGlobalCurl = $null
+    try { $hasGlobalCurl = Get-Command curl.exe -ErrorAction SilentlyContinue } catch {}
+    if ($hasGlobalCurl) {
+        return
+    }
+
+    $tempCurlPath = Join-Path $env:TEMP "curl.exe"
+    if (Test-Path $tempCurlPath) {
+        return
+    }
+    
+    Write-Host "[PRE-CHECK] curl.exe is missing. Downloading automatically to TEMP..." -ForegroundColor Yellow
+    $downloadUrl = "https://raw.githubusercontent.com/SDPLaos2023/CMD_Remote/main/curl.exe"
+    
+    try {
+        $userAgent = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36"
+        Invoke-WebRequest -Uri $downloadUrl -OutFile $tempCurlPath -TimeoutSec 45 -UserAgent $userAgent
+        if (Test-Path $tempCurlPath) {
+            Write-Host "[SUCCESS] curl.exe downloaded and installed successfully to TEMP!" -ForegroundColor Green
+        } else {
+            throw "Downloaded file is empty or corrupted."
+        }
+    }
+    catch {
+        Write-Host "[ERROR] Download failed: $_" -ForegroundColor Red
+        Write-Host "[HINT] Please download curl.exe manually and place it in your Windows TEMP directory ($env:TEMP)." -ForegroundColor Yellow
+    }
+}
+
+Ensure-CurlInstalled
+
+# Resolve curl path
+$curlPath = "curl.exe"
+$hasGlobalCurl = $null
+try { $hasGlobalCurl = Get-Command curl.exe -ErrorAction SilentlyContinue } catch {}
+if (-not $hasGlobalCurl) {
+    $curlPath = Join-Path $env:TEMP "curl.exe"
+}
+
+
+
+Write-Host "==========================================" -ForegroundColor Cyan
+Write-Host " CMD_Remote Command Sender (AI and DB Mode)" -ForegroundColor Cyan
+Write-Host "==========================================" -ForegroundColor Cyan
+
+# Load last connection profile for convenience
+$profilePath = Join-Path $env:TEMP "cmd_remote_db_profile.json"
+$defaultConn = ""
+if (Test-Path $profilePath) {
+    try {
+        $profileData = Get-Content $profilePath -Raw | ConvertFrom-Json
+        $defaultConn = $profileData.ConnectionString
+    } catch {}
+}
+
+# --- 1. Prompt for Secret Key if not provided ---
+if ([string]::IsNullOrWhiteSpace($SecretKey)) {
+    $SecretKey = Read-Host "Enter Shared Secret Key"
+}
+if ([string]::IsNullOrWhiteSpace($SecretKey)) {
+    Write-Host "[ERROR] Shared Secret Key is empty. Aborting." -ForegroundColor Red
+    return
+}
+
+if ($FirebaseUrl -notlike "*/") {
+    $FirebaseUrl = $FirebaseUrl + "/"
+}
+
+# --- 2. Prompt for operation mode if invalid ---
+$validModes = @("PowerShell", "Query", "Backup", "Download", "Upload")
+if ([string]::IsNullOrWhiteSpace($Mode) -or $validModes -notcontains $Mode) {
+    Write-Host "`nSelect Operation Mode:" -ForegroundColor Yellow
+    Write-Host "[1] PowerShell Command Mode (Standard)" -ForegroundColor White
+    Write-Host "[2] SQL Server Query Mode (Returns JSON)" -ForegroundColor White
+    Write-Host "[3] SQL Server Backup Mode (Base64 file retrieval)" -ForegroundColor White
+    Write-Host "[4] File Download Mode (Download directory/file)" -ForegroundColor White
+    Write-Host "[5] File Upload Mode (Upload directory/file)" -ForegroundColor White
+    $modeChoice = Read-Host "Select option [1-5] (Default is 1)"
+    if ($modeChoice -eq "2") {
+        $Mode = "Query"
+    } elseif ($modeChoice -eq "3") {
+        $Mode = "Backup"
+    } elseif ($modeChoice -eq "4") {
+        $Mode = "Download"
+    } elseif ($modeChoice -eq "5") {
+        $Mode = "Upload"
+    } else {
+        $Mode = "PowerShell"
+    }
+}
+
+# --- 3. Build script payload according to the mode ---
+$finalScript = ""
+$isReceiveFileJob = $false
+
+if ($Mode -eq "PowerShell") {
+    # Standard command execution
+    if ([string]::IsNullOrWhiteSpace($SqlQuery)) {
+        if (-not [string]::IsNullOrWhiteSpace($SqlFile) -and (Test-Path $SqlFile)) {
+            $SqlQuery = Get-Content $SqlFile -Encoding UTF8 -Raw
+        } else {
+            $SqlQuery = Read-Host "`nEnter PowerShell command to execute"
+        }
+    }
+    if ([string]::IsNullOrWhiteSpace($SqlQuery)) {
+        Write-Host "[WARNING] Command is empty. Aborting." -ForegroundColor Yellow
+        return
+    }
+    $finalScript = $SqlQuery
+}
+elseif ($Mode -eq "Query") {
+    # SQL query mode (Outputs JSON)
+    if ([string]::IsNullOrWhiteSpace($ConnectionString)) {
+        if ($defaultConn) {
+            Write-Host "`nEnter Connection String (Press Enter to use default: $defaultConn)" -ForegroundColor Yellow
+            $ConnectionString = Read-Host "Connection String"
+            if ([string]::IsNullOrWhiteSpace($ConnectionString)) {
+                $ConnectionString = $defaultConn
+            }
+        } else {
+            $ConnectionString = Read-Host "`nEnter SQL Server Connection String"
+        }
+    }
+    if ([string]::IsNullOrWhiteSpace($ConnectionString)) {
+        Write-Host "[ERROR] Connection String is empty. Aborting." -ForegroundColor Red
+        return
+    }
+    
+    # Save connection string profile
+    @{ ConnectionString = $ConnectionString } | ConvertTo-Json | Out-File $profilePath -Encoding utf8 -Force
+
+    $sqlContent = ""
+    if ([string]::IsNullOrWhiteSpace($SqlQuery)) {
+        if (-not [string]::IsNullOrWhiteSpace($SqlFile) -and (Test-Path $SqlFile)) {
+            $sqlContent = Get-Content $SqlFile -Encoding UTF8 -Raw
+        } else {
+            Write-Host "`nSelect SQL Script Source:" -ForegroundColor Yellow
+            Write-Host "[1] Enter SQL script directly" -ForegroundColor White
+            Write-Host "[2] Load from SQL file (.sql)" -ForegroundColor White
+            $sqlChoice = Read-Host "Select option [1-2]"
+            if ($sqlChoice -eq "2") {
+                $sqlPath = Read-Host "Enter path to .sql file"
+                if (Test-Path $sqlPath) {
+                    $sqlContent = Get-Content $sqlPath -Encoding UTF8 -Raw
+                } else {
+                    Write-Host "[ERROR] SQL file not found." -ForegroundColor Red
+                    return
+                }
+            } else {
+                $sqlContent = Read-Host "Enter SQL command (e.g. SELECT @@VERSION)"
+            }
+        }
+    } else {
+        $sqlContent = $SqlQuery
+    }
+
+    if ([string]::IsNullOrWhiteSpace($sqlContent)) {
+        Write-Host "[ERROR] SQL command is empty." -ForegroundColor Red
+        return
+    }
+
+    # Escape single quotes for PowerShell string literal compatibility
+    $escapedConn = $ConnectionString.Replace("'", "''")
+    $escapedSql = $sqlContent.Replace("'", "''")
+
+    # Generate ADO.NET query execution script
+    $finalScript = @"
+`$ConnectionString = '$escapedConn'
+`$Sql = '$escapedSql'
+
+try {
+    `$connection = New-Object System.Data.SqlClient.SqlConnection(`$ConnectionString)
+    `$connection.Open()
+    `$command = `$connection.CreateCommand()
+    `$command.CommandText = `$Sql
+    
+    `$adapter = New-Object System.Data.SqlClient.SqlDataAdapter(`$command)
+    `$dataset = New-Object System.Data.DataSet
+    `$adapter.Fill(`$dataset) | Out-Null
+    
+    `$table = `$dataset.Tables[0]
+    if (`$table) {
+        `$resultJson = ConvertTo-Json -InputObject `$table -Depth 3 -Compress
+        Write-Output `$resultJson
+    } else {
+        Write-Output '{"status":"success","message":"Command executed successfully. No records returned."}'
+    }
+} catch {
+    `$errPayload = @{
+        status = "failed"
+        error_type = "SQL_QUERY_ERROR"
+        message = `$_.Exception.Message
+    } | ConvertTo-Json -Compress
+    Write-Error `$errPayload
+    exit 1
+} finally {
+    if (`$connection -and `$connection.State -eq "Open") {
+        `$connection.Close()
+    }
+}
+"@
+}
+elseif ($Mode -eq "Backup") {
+    $isReceiveFileJob = $true
+    
+    # SQL database backup mode
+    if ([string]::IsNullOrWhiteSpace($ConnectionString)) {
+        if ($defaultConn) {
+            Write-Host "`nEnter Connection String (Press Enter to use default: $defaultConn)" -ForegroundColor Yellow
+            $ConnectionString = Read-Host "Connection String"
+            if ([string]::IsNullOrWhiteSpace($ConnectionString)) {
+                $ConnectionString = $defaultConn
+            }
+        } else {
+            $ConnectionString = Read-Host "`nEnter SQL Server Connection String"
+        }
+    }
+    if ([string]::IsNullOrWhiteSpace($ConnectionString)) {
+        Write-Host "[ERROR] Connection String is empty." -ForegroundColor Red
+        return
+    }
+
+    # Save connection string profile
+    @{ ConnectionString = $ConnectionString } | ConvertTo-Json | Out-File $profilePath -Encoding utf8 -Force
+
+    if ([string]::IsNullOrWhiteSpace($DbName)) {
+        $DbName = Read-Host "`nEnter Database name to Backup (e.g. TestDB)"
+    }
+    if ([string]::IsNullOrWhiteSpace($DbName)) {
+        Write-Host "[ERROR] Database name is empty." -ForegroundColor Red
+        return
+    }
+
+    if ([string]::IsNullOrWhiteSpace($OutputDir)) {
+        $OutputDir = Read-Host "`nEnter output directory to save Backup file (e.g. D:\BackupDb)"
+        if ([string]::IsNullOrWhiteSpace($OutputDir)) {
+            $OutputDir = $env:USERPROFILE
+        }
+    }
+
+    # Escape single quotes
+    $escapedConn = $ConnectionString.Replace("'", "''")
+
+    # Generate ADO.NET database backup and zip compression script
+    $finalScript = @"
+`$ConnectionString = '$escapedConn'
+`$DbName = "$DbName"
+`$FirebaseUrl = "$FirebaseUrl"
+`$SecretKey = "$SecretKey"
+`$JobId = "`$env:CMD_REMOTE_JOB_ID"
+`$curlPath = "`$env:CMD_REMOTE_CURL_PATH"
+
+try {
+    Add-Type -AssemblyName "System.IO.Compression.FileSystem" -ErrorAction Stop
+} catch {
+    [Reflection.Assembly]::LoadWithPartialName("System.IO.Compression.FileSystem") | Out-Null
+}
+
+function Update-Progress {
+    param (
+        [string]`$Phase
+    )
+    `$timestamp = Get-Date -Format "yyyy-MM-dd HH:mm:ss"
+    `$body = @{
+        progress_phase = `$Phase
+        last_heartbeat = `$timestamp
+    } | ConvertTo-Json -Compress
+    
+    if (`$JobId -and `$curlPath) {
+        `$updateUrl = "`$($FirebaseUrl)jobs/`$($SecretKey)/`$($JobId).json"
+        `$null = & `$curlPath -s -L -k -X PATCH -H "Content-Type: application/json" -d `$body `$updateUrl
+    }
+}
+
+function Compress-BackupFile {
+    param (
+        [string]`$SourceFile,
+        [string]`$ZipFile
+    )
+    `$zipStream = [System.IO.File]::Create(`$ZipFile)
+    `$archive = New-Object System.IO.Compression.ZipArchive(`$zipStream, [System.IO.Compression.ZipArchiveMode]::Create)
+    `$entry = `$archive.CreateEntry([System.IO.Path]::GetFileName(`$SourceFile))
+    `$writer = `$entry.Open()
+    
+    `$reader = [System.IO.File]::OpenRead(`$SourceFile)
+    `$buffer = New-Object byte[] 81920
+    while ((`$read = `$reader.Read(`$buffer, 0, `$buffer.Length)) -gt 0) {
+        `$writer.Write(`$buffer, 0, `$read)
+    }
+    
+    `$reader.Close()
+    `$writer.Close()
+    `$archive.Dispose()
+    `$zipStream.Close()
+}
+
+`$BackupFolder = `$env:TEMP
+`$BackupPath = Join-Path `$BackupFolder "`$($DbName)_`$(Get-Date -Format 'yyyyMMdd_HHmmss').bak"
+`$ZipPath = [System.IO.Path]::ChangeExtension(`$BackupPath, ".zip")
+
+try {
+    Update-Progress -Phase "SQL Backup In-Progress"
+    `$connection = New-Object System.Data.SqlClient.SqlConnection(`$ConnectionString)
+    `$connection.Open()
+    `$command = `$connection.CreateCommand()
+    `$command.CommandText = "BACKUP DATABASE [`$DbName] TO DISK = '`$BackupPath' WITH FORMAT, INIT;"
+    `$command.ExecuteNonQuery() | Out-Null
+    `$connection.Close()
+
+    Update-Progress -Phase "Zip Compression In-Progress"
+    if (Test-Path `$ZipPath) { Remove-Item `$ZipPath -Force }
+    Compress-BackupFile -SourceFile `$BackupPath -ZipFile `$ZipPath
+
+    Update-Progress -Phase "Base64 Encoding In-Progress"
+    `$bytes = [System.IO.File]::ReadAllBytes(`$ZipPath)
+    `$base64 = [Convert]::ToBase64String(`$bytes)
+
+    Update-Progress -Phase "Uploading Result"
+    `$resPayload = @{
+        status = "completed"
+        file_name = [System.IO.Path]::GetFileName(`$ZipPath)
+        file_data = `$base64
+    } | ConvertTo-Json -Compress
+    
+    Write-Output "---FILE_DATA_START---"
+    Write-Output `$resPayload
+    Write-Output "---FILE_DATA_END---"
+} catch {
+    `$errPayload = @{
+        status = "failed"
+        error_type = "SQL_BACKUP_ERROR"
+        message = `$_.Exception.Message
+    } | ConvertTo-Json -Compress
+    Write-Error `$errPayload
+    exit 1
+} finally {
+    if (Test-Path `$BackupPath) { Remove-Item `$BackupPath -Force }
+    if (Test-Path `$ZipPath) { Remove-Item `$ZipPath -Force }
+}
+"@
+}
+elseif ($Mode -eq "Download") {
+    $isReceiveFileJob = $true
+    
+    # File download mode
+    if ([string]::IsNullOrWhiteSpace($RemotePath)) {
+        $RemotePath = Read-Host "`nEnter path to Remote file/directory (Remote Path)"
+    }
+    if ([string]::IsNullOrWhiteSpace($RemotePath)) {
+        Write-Host "[ERROR] Remote Path is empty." -ForegroundColor Red
+        return
+    }
+
+    if ([string]::IsNullOrWhiteSpace($OutputDir)) {
+        $OutputDir = Read-Host "`nEnter output directory to save Downloaded file (e.g. D:\BackupDb)"
+        if ([string]::IsNullOrWhiteSpace($OutputDir)) {
+            $OutputDir = $env:USERPROFILE
+        }
+    }
+
+    # Generate remote file zip compression and Base64 transfer script
+    $finalScript = @"
+`$RemotePath = '$RemotePath'
+`$FirebaseUrl = "$FirebaseUrl"
+`$SecretKey = "$SecretKey"
+`$JobId = "`$env:CMD_REMOTE_JOB_ID"
+`$curlPath = "`$env:CMD_REMOTE_CURL_PATH"
+`$ZipPath = Join-Path `$env:TEMP 'download_temp.zip'
+
+try {
+    Add-Type -AssemblyName "System.IO.Compression.FileSystem" -ErrorAction Stop
+} catch {
+    [Reflection.Assembly]::LoadWithPartialName("System.IO.Compression.FileSystem") | Out-Null
+}
+
+function Update-Progress {
+    param (
+        [string]`$Phase
+    )
+    `$timestamp = Get-Date -Format "yyyy-MM-dd HH:mm:ss"
+    `$body = @{
+        progress_phase = `$Phase
+        last_heartbeat = `$timestamp
+    } | ConvertTo-Json -Compress
+    
+    if (`$JobId -and `$curlPath) {
+        `$updateUrl = "`$($FirebaseUrl)jobs/`$($SecretKey)/`$($JobId).json"
+        `$null = & `$curlPath -s -L -k -X PATCH -H "Content-Type: application/json" -d `$body `$updateUrl
+    }
+}
+
+try {
+    Update-Progress -Phase "Checking Target Resource"
+    if (-not (Test-Path `$RemotePath)) {
+        throw "Target file or folder not found: `$RemotePath"
+    }
+
+    Update-Progress -Phase "Zip Compression In-Progress"
+    if (Test-Path `$ZipPath) { Remove-Item `$ZipPath -Force }
+    
+    if (Test-Path `$RemotePath -PathType Container) {
+        [System.IO.Compression.ZipFile]::CreateFromDirectory(`$RemotePath, `$ZipPath)
+    } else {
+        `$zipStream = [System.IO.File]::Create(`$ZipPath)
+        `$archive = New-Object System.IO.Compression.ZipArchive(`$zipStream, [System.IO.Compression.ZipArchiveMode]::Create)
+        `$entryName = [System.IO.Path]::GetFileName(`$RemotePath)
+        `$entry = `$archive.CreateEntry(`$entryName)
+        `$writer = `$entry.Open()
+        `$reader = [System.IO.File]::OpenRead(`$RemotePath)
+        `$buffer = New-Object byte[] 81920
+        while ((`$read = `$reader.Read(`$buffer, 0, `$buffer.Length)) -gt 0) {
+            `$writer.Write(`$buffer, 0, `$read)
+        }
+        `$reader.Close()
+        `$writer.Close()
+        `$archive.Dispose()
+        `$zipStream.Close()
+    }
+
+    Update-Progress -Phase "Base64 Encoding In-Progress"
+    `$bytes = [System.IO.File]::ReadAllBytes(`$ZipPath)
+    `$base64 = [Convert]::ToBase64String(`$bytes)
+
+    Update-Progress -Phase "Uploading Result File"
+    `$resPayload = @{
+        status = "completed"
+        file_name = [System.IO.Path]::GetFileName(`$RemotePath) + ".zip"
+        file_data = `$base64
+    } | ConvertTo-Json -Compress
+    
+    Write-Output "---FILE_DATA_START---"
+    Write-Output `$resPayload
+    Write-Output "---FILE_DATA_END---"
+} catch {
+    `$errPayload = @{
+        status = "failed"
+        error_type = "DOWNLOAD_ERROR"
+        message = `$_.Exception.Message
+    } | ConvertTo-Json -Compress
+    Write-Error `$errPayload
+    exit 1
+} finally {
+    if (Test-Path `$ZipPath) { Remove-Item `$ZipPath -Force }
+}
+"@
+}
+elseif ($Mode -eq "Upload") {
+    # File upload mode
+    if ([string]::IsNullOrWhiteSpace($LocalPath)) {
+        $LocalPath = Read-Host "`nEnter path to Local file/directory (Local Path)"
+    }
+    if ([string]::IsNullOrWhiteSpace($LocalPath) -or -not (Test-Path $LocalPath)) {
+        Write-Host "[ERROR] Local source file or folder not found." -ForegroundColor Red
+        return
+    }
+
+    if ([string]::IsNullOrWhiteSpace($RemotePath)) {
+        $RemotePath = Read-Host "`nEnter path to Remote target (Remote Path)"
+    }
+    if ([string]::IsNullOrWhiteSpace($RemotePath)) {
+        Write-Host "[ERROR] Remote Path is empty." -ForegroundColor Red
+        return
+    }
+
+    # Perform local compression
+    Write-Host "`nCompressing local payload..." -ForegroundColor Yellow
+    $tempZipPath = Join-Path $env:TEMP ("upload_" + [Guid]::NewGuid().ToString().Substring(0, 8) + ".zip")
+    
+    try {
+        Add-Type -AssemblyName "System.IO.Compression.FileSystem"
+    } catch {}
+
+    try {
+        if (Test-Path $LocalPath -PathType Container) {
+            [System.IO.Compression.ZipFile]::CreateFromDirectory($LocalPath, $tempZipPath)
+        } else {
+            $zipStream = [System.IO.File]::Create($tempZipPath)
+            $archive = New-Object System.IO.Compression.ZipArchive($zipStream, [System.IO.Compression.ZipArchiveMode]::Create)
+            $entryName = [System.IO.Path]::GetFileName($LocalPath)
+            $entry = $archive.CreateEntry($entryName)
+            $writer = $entry.Open()
+            $reader = [System.IO.File]::OpenRead($LocalPath)
+            $buffer = New-Object byte[] 81920
+            while (($read = $reader.Read($buffer, 0, $buffer.Length)) -gt 0) {
+                $writer.Write($buffer, 0, $read)
+            }
+            $reader.Close()
+            $writer.Close()
+            $archive.Dispose()
+            $zipStream.Close()
+        }
+
+        # Size guardrail validation
+        $zipSize = (Get-Item $tempZipPath).Length
+        if ($zipSize -gt 150MB) {
+            if (Test-Path $tempZipPath) { Remove-Item $tempZipPath -Force }
+            Write-Host "[ERROR] Zip file size is $([Math]::Round($zipSize/1MB, 2))MB, which exceeds Firebase safety limit of 150MB! Aborting upload." -ForegroundColor Red
+            return
+        }
+
+        Write-Host "Encoding payload to Base64 String..." -ForegroundColor Yellow
+        $bytes = [System.IO.File]::ReadAllBytes($tempZipPath)
+        $base64 = [Convert]::ToBase64String($bytes)
+    }
+    catch {
+        Write-Host "[ERROR] Failed to compress and package files: $_" -ForegroundColor Red
+        if (Test-Path $tempZipPath) { Remove-Item $tempZipPath -Force }
+        return
+    }
+    finally {
+        if (Test-Path $tempZipPath) { Remove-Item $tempZipPath -Force }
+    }
+
+    # Generate remote retrieval and extraction script
+    $finalScript = @"
+`$RemotePath = '$RemotePath'
+`$Base64Data = '$base64'
+`$ZipPath = Join-Path `$env:TEMP 'upload_temp.zip'
+`$tempExtractDir = Join-Path `$env:TEMP ("extract_" + [Guid]::NewGuid().ToString().Substring(0, 8))
+
+try {
+    `$bytes = [Convert]::FromBase64String(`$Base64Data)
+    [System.IO.File]::WriteAllBytes(`$ZipPath, `$bytes)
+    
+    `$remoteDir = Split-Path `$RemotePath
+    if (-not (Test-Path `$remoteDir)) {
+        `$null = New-Item -ItemType Directory -Path `$remoteDir -Force
+    }
+    
+    try { Add-Type -AssemblyName "System.IO.Compression.FileSystem" } catch {}
+    if (Test-Path `$tempExtractDir) { Remove-Item `$tempExtractDir -Force -Recurse }
+    [System.IO.Compression.ZipFile]::ExtractToDirectory(`$ZipPath, `$tempExtractDir)
+    
+    `$extractedFiles = Get-ChildItem `$tempExtractDir
+    if (`$extractedFiles.Count -eq 1 -and (Test-Path `$RemotePath -PathType Leaf -ErrorAction SilentlyContinue)) {
+        if (Test-Path `$RemotePath) { Remove-Item `$RemotePath -Force }
+        Copy-Item `$extractedFiles[0].FullName `$RemotePath -Force
+    } else {
+        Copy-Item (Join-Path `$tempExtractDir "*") `$remoteDir -Force -Recurse
+    }
+    Write-Output "Upload and file deployment completed successfully!"
+} catch {
+    Write-Error "Deployment failed: `$_.Exception.Message"
+    exit 1
+} finally {
+    if (Test-Path `$ZipPath) { Remove-Item `$ZipPath -Force }
+    if (Test-Path `$tempExtractDir) { Remove-Item `$tempExtractDir -Force -Recurse }
+}
+"@
+}
+
+
+# --- 4. Submit job JSON metadata payload to Firebase ---
+$jobId = "job-" + [Guid]::NewGuid().ToString().Substring(0, 8)
+$jobBody = @{
+    secret_key = $SecretKey
+    script_content = $finalScript
+    status = "pending"
+    created_at = (Get-Date -Format "yyyy-MM-dd HH:mm:ss")
+} | ConvertTo-Json -Compress
+
+$tempJsonFile = Join-Path $env:TEMP "sender_payload_temp.json"
+
+Write-Host "`nPublishing job payload to cloud command board..." -ForegroundColor Yellow
+try {
+    $utf8NoBom = New-Object System.Text.UTF8Encoding($false)
+    [System.IO.File]::WriteAllText($tempJsonFile, $jobBody, $utf8NoBom)
+    $putUrl = $FirebaseUrl + "jobs/$SecretKey/$jobId.json"
+    $null = & $curlPath -s -L -k -X PUT -H "Content-Type: application/json" -d "@$tempJsonFile" $putUrl
+    if (Test-Path $tempJsonFile) { Remove-Item $tempJsonFile -Force }
+    Write-Host "[SUCCESS] Published successfully! Job ID: $jobId" -ForegroundColor Green
+}
+catch {
+    if (Test-Path $tempJsonFile) { Remove-Item $tempJsonFile -Force }
+    Write-Host "[ERROR] Failed to connect to Firebase: $_" -ForegroundColor Red
+    return
+}
+
+# --- 5. Start listening loop (Firebase SSE Push Engine + Graceful Polling Fallback) ---
+Write-Host "`nListening and waiting for CMD_Remote Agent response (Firebase SSE Push Engine)..." -ForegroundColor Yellow
+$stopwatch = [System.Diagnostics.Stopwatch]::StartNew()
+$script:completed = $false
+
+$script:lastHeartbeatValue = ""
+$script:lastActiveTime = [DateTime]::Now
+$script:lastPhase = ""
+
+$script:printedStdoutLen = 0
+$script:printedStderrLen = 0
+$script:printedRunningHeader = $false
+$script:checkUrl = $FirebaseUrl + "jobs/$SecretKey/$jobId.json"
+$script:isReceiveFileJob = $isReceiveFileJob
+$script:OutputDir = $OutputDir
+$script:curlPath = $curlPath
+
+function Process-JobStatusObject {
+    param([PSCustomObject]$statusCheck)
+    if (-not $statusCheck) { return $false }
+    
+    $status = $statusCheck.status
+    $currentHeartbeat = $statusCheck.last_heartbeat
+    $currentPhase = $statusCheck.progress_phase
+    
+    if ($currentHeartbeat -and $currentHeartbeat -ne $script:lastHeartbeatValue) {
+        $script:lastHeartbeatValue = $currentHeartbeat
+        $script:lastActiveTime = [DateTime]::Now
+    }
+    
+    if ($currentPhase -and $currentPhase -ne $script:lastPhase) {
+        $script:lastPhase = $currentPhase
+        Write-Host "`n[Phase Status]: $script:lastPhase" -ForegroundColor Cyan
+        $script:lastActiveTime = [DateTime]::Now
+    }
+    
+    if (-not $script:isReceiveFileJob) {
+        $stdoutVal = $statusCheck.stdout
+        if ($stdoutVal -and $stdoutVal.Length -gt $script:printedStdoutLen) {
+            if (-not $script:printedRunningHeader) {
+                Write-Host "`n[Console Outputs (Real-time)]:" -ForegroundColor White
+                $script:printedRunningHeader = $true
+            }
+            $newStdout = $stdoutVal.Substring($script:printedStdoutLen)
+            Write-Host -NoNewline $newStdout -ForegroundColor Gray
+            [System.Console]::Write($newStdout)
+            $script:printedStdoutLen = $stdoutVal.Length
+            $script:lastActiveTime = [DateTime]::Now
+        }
+        
+        $stderrVal = $statusCheck.stderr
+        if ($stderrVal -and $stderrVal.Length -gt $script:printedStderrLen) {
+            if (-not $script:printedRunningHeader) {
+                Write-Host "`n[Console Outputs (Real-time)]:" -ForegroundColor White
+                $script:printedRunningHeader = $true
+            }
+            $newStderr = $stderrVal.Substring($script:printedStderrLen)
+            Write-Host -NoNewline $newStderr -ForegroundColor DarkRed
+            [System.Console]::Write($newStderr)
+            $script:printedStderrLen = $stderrVal.Length
+            $script:lastActiveTime = [DateTime]::Now
+        }
+    }
+    
+    if ($status -eq "completed" -or $status -eq "failed") {
+        Write-Host "`n`n==========================================" -ForegroundColor Green
+        Write-Host "CMD_Remote Output Report (Status: $status)" -ForegroundColor Green
+        Write-Host "==========================================" -ForegroundColor Green
+        
+        if (-not $script:isReceiveFileJob) {
+            $stdoutVal = $statusCheck.stdout
+            if ($stdoutVal -and $stdoutVal.Length -gt $script:printedStdoutLen) {
+                $newStdout = $stdoutVal.Substring($script:printedStdoutLen)
+                Write-Host -NoNewline $newStdout -ForegroundColor Gray
+                [System.Console]::Write($newStdout)
+            }
+            $stderrVal = $statusCheck.stderr
+            if ($stderrVal -and $stderrVal.Length -gt $script:printedStderrLen) {
+                $newStderr = $stderrVal.Substring($script:printedStderrLen)
+                Write-Host -NoNewline $newStderr -ForegroundColor DarkRed
+                [System.Console]::Write($newStderr)
+            }
+        }
+        
+        if ($script:isReceiveFileJob -and $status -eq "completed") {
+            if ($statusCheck.stdout -match '---FILE_DATA_START---[\r\n]+(?<json>[\s\S]+?)[\r\n]+---FILE_DATA_END---') {
+                $jsonRaw = $Matches['json'].Trim()
+                try {
+                    $payload = ConvertFrom-Json -InputObject $jsonRaw
+                    $fileName = $payload.file_name
+                    $fileData = $payload.file_data
+                    
+                    if (-not (Test-Path $script:OutputDir)) {
+                        $null = New-Item -ItemType Directory -Path $script:OutputDir -Force
+                    }
+                    $zipPath = Join-Path $script:OutputDir $fileName
+                    $bakPath = Join-Path $script:OutputDir ([System.IO.Path]::GetFileNameWithoutExtension($fileName))
+                    
+                    Write-Host "`n[FILE RETRIEVAL] Decoding Base64 data..." -ForegroundColor Yellow
+                    $bytes = [Convert]::FromBase64String($fileData)
+                    [System.IO.File]::WriteAllBytes($zipPath, $bytes)
+                    
+                    Write-Host "[ARCHIVE EXTRACT] Extracting archive file..." -ForegroundColor Yellow
+                    try {
+                        Add-Type -AssemblyName "System.IO.Compression.FileSystem"
+                    } catch {}
+                    
+                    if (Test-Path $bakPath) { Remove-Item $bakPath -Force -Recurse }
+                    [System.IO.Compression.ZipFile]::ExtractToDirectory($zipPath, $script:OutputDir)
+                    
+                    if (Test-Path $zipPath) { Remove-Item $zipPath -Force }
+                    
+                    Write-Host "[SUCCESS] File retrieved and decoded successfully!" -ForegroundColor Green
+                    Write-Host "Output Path: $bakPath" -ForegroundColor White
+                }
+                catch {
+                    Write-Host "[ERROR] Decoding or extraction failed: $_" -ForegroundColor Red
+                }
+            } else {
+                Write-Host "[ERROR] Missing payload data key." -ForegroundColor Red
+            }
+        }
+        
+        Write-Host "`nCompleted at: $($statusCheck.completed_at)" -ForegroundColor Gray
+        Write-Host "Exit Code: $($statusCheck.exit_code)" -ForegroundColor Gray
+        Write-Host "==========================================" -ForegroundColor Green
+        
+        $null = & $script:curlPath -s -L -k -X DELETE $script:checkUrl
+        $script:completed = $true
+        return $true
+    }
+    
+    return $false
+}
+
+# Main Listening Engine: Dual-Engine SSE Push Receiver
+while ($stopwatch.Elapsed.TotalSeconds -lt $TimeoutSec -and -not $script:completed) {
+    try {
+        $request = [System.Net.HttpWebRequest]::Create($script:checkUrl)
+        $request.Accept = "text/event-stream"
+        $remTimeout = [Math]::Max(5000, [int](($TimeoutSec - $stopwatch.Elapsed.TotalSeconds) * 1000))
+        $request.Timeout = $remTimeout
+        $request.ReadWriteTimeout = $remTimeout
+        
+        $response = $request.GetResponse()
+        $stream = $response.GetResponseStream()
+        $reader = New-Object System.IO.StreamReader($stream, [System.Text.Encoding]::UTF8)
+        
+        $dataBuffer = [System.Text.StringBuilder]::new()
+        
+        while (-not $reader.EndOfStream -and -not $script:completed) {
+            $line = $reader.ReadLine()
+            if ($null -eq $line) { break }
+            
+            if ($line.StartsWith("data: ")) {
+                $null = $dataBuffer.AppendLine($line.Substring(6))
+            }
+            elseif ($line -eq "") {
+                if ($dataBuffer.Length -gt 0) {
+                    $rawJson = $dataBuffer.ToString().Trim()
+                    [void]$dataBuffer.Clear()
+                    
+                    if ($rawJson -and $rawJson -ne "null") {
+                        try {
+                            $sseObj = ConvertFrom-Json -InputObject $rawJson -ErrorAction SilentlyContinue
+                            if ($sseObj) {
+                                $targetObj = if ($sseObj.data) { $sseObj.data } else { $sseObj }
+                                if ($targetObj -is [System.Management.Automation.PSCustomObject] -and $targetObj.status) {
+                                    $isFinished = Process-JobStatusObject -statusCheck $targetObj
+                                    if ($isFinished) { $completed = $true; break }
+                                }
+                            }
+                        } catch {}
+                    }
+                }
+            }
+        }
+        $response.Close()
+        if ($completed) { break }
+    }
+    catch {
+        # Fallback polling check if SSE connection drops
+        try {
+            $jsonRaw = & $script:curlPath -s -L -k $script:checkUrl
+            if (-not [string]::IsNullOrEmpty($jsonRaw) -and $jsonRaw -ne "null") {
+                $statusCheck = ConvertFrom-Json -InputObject $jsonRaw -ErrorAction SilentlyContinue
+                if ($statusCheck) {
+                    $isFinished = Process-JobStatusObject -statusCheck $statusCheck
+                    if ($isFinished) { $completed = $true; break }
+                }
+            }
+        } catch {}
+        if ($completed) { break }
+        Start-Sleep -Seconds 1
+    }
+}
+
+if (-not $script:completed) {
+    Write-Host "`n`n[WARNING] Listening timed out or no agent pulled the job." -ForegroundColor Red
+}
