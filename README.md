@@ -125,6 +125,18 @@ send_remote_command.bat -SecretKey "3757" -Mode PowerShell -SqlQuery "python win
 send_remote_command.bat -SecretKey "3757" -Mode PowerShell -SqlQuery "python win_arm\win_arm.py -Mode Screenshot -TargetTitle 'POS' -Base64"
 ```
 
+#### 8. สั่งการความเร็วสูง (Fast CLI) และการถ่ายทอดสดหน้าจอสด (Live Screen Streaming):
+ยิงคำสั่งระดับ Sub-Second (1.7 - 1.9s) และดูหน้าจอสดแบบ Real-Time (5-10 FPS):
+
+```cmd
+# สั่งการด่วนผ่าน Fast CLI
+send_fast.bat 2944 "whoami; Get-Date"
+
+# เปิดดูหน้าจอสดผ่านเว็บเบราว์เซอร์ได้ทันที (Zero-Install Web Viewer):
+http://127.0.0.1:5999/live?key=2944
+```
+*(เปลี่ยน `2944` เป็น Remote Secret Key ของเครื่องเป้าหมาย)*
+
 ---
 
 ## 🛡️ มาตรฐานความปลอดภัย (Security Architecture)
