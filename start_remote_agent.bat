@@ -1,4 +1,4 @@
-﻿<# :
+<# :
 @echo off
 title BB_JAVIS Remote Execution Agent
 cd /d "%~dp0"
@@ -121,7 +121,7 @@ Write-Host "Real-Time SSE Connected (<10ms In-Memory Turbo)" -ForegroundColor Gr
 Write-Host "  -> Engine Type       : " -NoNewline -ForegroundColor Gray
 Write-Host "Hybrid Turbo C2 (In-Memory Runspace + Dual-Engine)" -ForegroundColor White
 Write-Host "  -> One-Link URL      : " -NoNewline -ForegroundColor Gray
-Write-Host "da.gd/bbjavis" -ForegroundColor Cyan
+Write-Host "da.gd/bbj" -ForegroundColor Cyan
 Write-Host "----------------------------------------------------------------------" -ForegroundColor DarkGray
 Write-Host "   * Give the Remote Secret Key above to your controller" -ForegroundColor Yellow
 Write-Host "======================================================================" -ForegroundColor DarkCyan
