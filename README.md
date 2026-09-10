@@ -118,6 +118,13 @@ send_remote_command.bat -SecretKey "3757" -Mode Cancel
 ```
 *(หรือกด `Ctrl+C` ที่หน้าจอของตัวส่งขณะรอ ระบบจะส่งสัญญาณ Abort ไปสั่งหยุดคำสั่งบนเครื่องปลายทางทันที)*
 
+#### 7. ควบคุมหน้าจอและ GUI อัตโนมัติ (Windows UI Automation via win-arm):
+```cmd
+# สั่งคลิกปุ่ม สลับแท็บ หรือกรอกข้อความในโปรแกรมบนเครื่องปลายทางผ่าน UIA Engine (ความเร็ว <50ms ไม่แย่งเมาส์)
+send_remote_command.bat -SecretKey "3757" -Mode PowerShell -SqlQuery "python win_arm\win_arm.py -Mode Click -TargetTitle 'POS' -ControlName 'ปิดกะ'"
+send_remote_command.bat -SecretKey "3757" -Mode PowerShell -SqlQuery "python win_arm\win_arm.py -Mode Screenshot -TargetTitle 'POS' -Base64"
+```
+
 ---
 
 ## 🛡️ มาตรฐานความปลอดภัย (Security Architecture)
