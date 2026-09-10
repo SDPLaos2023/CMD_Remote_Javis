@@ -17,6 +17,7 @@ param (
     [string]$OutputDir,
     [string]$LocalPath,
     [string]$RemotePath,
+    [string]$ExecutionMode = "turbo",
     [int]$TimeoutSec = 300
 )
 
@@ -626,6 +627,7 @@ $jobBody = @{
     secret_key = $SecretKey
     script_content = $finalScript
     status = "pending"
+    execution_mode = $ExecutionMode
     created_at = (Get-Date -Format "yyyy-MM-dd HH:mm:ss")
     timeout_sec = $TimeoutSec
     abort = $false
@@ -845,7 +847,7 @@ try {
                 }
             } catch {}
             if ($completed) { break }
-            Start-Sleep -Seconds 1
+            Start-Sleep -Milliseconds 100
         }
     }
 }
