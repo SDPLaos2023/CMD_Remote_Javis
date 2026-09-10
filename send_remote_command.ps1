@@ -1,15 +1,4 @@
-<# :
-@echo off
-title CMD_Remote Command Sender
-cd /d "%~dp0"
-if exist "%~dp0send_remote_command.ps1" (
-    powershell -NoProfile -ExecutionPolicy Bypass -File "%~dp0send_remote_command.ps1" %*
-    exit /b %ERRORLEVEL%
-)
-powershell -NoProfile -ExecutionPolicy Bypass -Command "$s=[scriptblock]::Create((Get-Content -Encoding UTF8 '%~f0') -join \"`n\"); & $s %*"
-exit /b %ERRORLEVEL%
-#>
-param (
+﻿param (
     [string]$FirebaseUrl = "https://uat-api-agent-default-rtdb.firebaseio.com/",
     [string]$SecretKey,
     [string]$Mode,

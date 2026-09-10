@@ -417,58 +417,23 @@ function Execute-RemoteJob {
             $processInfo.Arguments = "-NoProfile -ExecutionPolicy Bypass -File `"$tempScriptPath`""
             $processInfo.RedirectStandardOutput = $true
             $processInfo.RedirectStandardError = $true
+            $processInfo.StandardOutputEncoding = [System.Text.Encoding]::UTF8
+            $processInfo.StandardErrorEncoding = [System.Text.Encoding]::UTF8
             $processInfo.UseShellExecute = $false
             $processInfo.CreateNoWindow = $true
 
             $process = New-Object System.Diagnostics.Process
             $process.StartInfo = $processInfo
 
-            $logQueue = [System.Collections.Concurrent.ConcurrentQueue[string]]::new()
-            $stdoutAction = {
-                if (-not [string]::IsNullOrEmpty($EventArgs.Data)) {
-                    $logQueue.Enqueue("OUT:" + $EventArgs.Data)
-                }
-            }
-            $stderrAction = {
-                if (-not [string]::IsNullOrEmpty($EventArgs.Data)) {
-                    $logQueue.Enqueue("ERR:" + $EventArgs.Data)
-                }
-            }
-
-            $jobStdout = Register-ObjectEvent -InputObject $process -EventName OutputDataReceived -Action $stdoutAction
-            $jobStderr = Register-ObjectEvent -InputObject $process -EventName ErrorDataReceived -Action $stderrAction
-
             $null = $process.Start()
-            $process.BeginOutputReadLine()
-            $process.BeginErrorReadLine()
+
+            $stdoutTask = $process.StandardOutput.ReadToEndAsync()
+            $stderrTask = $process.StandardError.ReadToEndAsync()
 
             $startTime = [DateTime]::UtcNow
-            $lastStreamingTime = [DateTime]::UtcNow
             $lastAbortCheckTime = [DateTime]::UtcNow
-            $stdoutTotalLength = 0
-            $stderrTotalLength = 0
-            $maxCharLimit = 500000
 
-            while (-not $process.HasExited) {
-                Start-Sleep -Milliseconds 100
-
-                $line = $null
-                while ($logQueue.TryDequeue([ref]$line)) {
-                    if ($line.StartsWith("OUT:")) {
-                        $data = $line.Substring(4)
-                        if ($stdoutTotalLength -lt $maxCharLimit) {
-                            $stdoutCollector.Add($data)
-                            $stdoutTotalLength += $data.Length
-                        }
-                    } elseif ($line.StartsWith("ERR:")) {
-                        $data = $line.Substring(4)
-                        if ($stderrTotalLength -lt $maxCharLimit) {
-                            $stderrCollector.Add($data)
-                            $stderrTotalLength += $data.Length
-                        }
-                    }
-                }
-
+            while (-not $process.WaitForExit(100)) {
                 $now = [DateTime]::UtcNow
 
                 if (($now - $lastAbortCheckTime).TotalMilliseconds -ge 500) {
@@ -491,20 +456,6 @@ function Execute-RemoteJob {
                     try { Stop-Process -Id $process.Id -Force -ErrorAction SilentlyContinue } catch {}
                     break
                 }
-
-                if (($now - $lastStreamingTime).TotalSeconds -ge 1.5) {
-                    $lastStreamingTime = $now
-                    $timestamp = Get-Date -Format "yyyy-MM-dd HH:mm:ss"
-                    $patchData = @{
-                        last_heartbeat = $timestamp
-                        progress_phase = "Executing process..."
-                        stdout = ($stdoutCollector -join "`r`n")
-                        stderr = ($stderrCollector -join "`r`n")
-                    } | ConvertTo-Json -Compress
-
-                    $updateUrl = $BaseUrl + "jobs/$CurrentKey/$JobId.json"
-                    $null = Invoke-FirebaseHttp -Uri $updateUrl -Method "PATCH" -Body $patchData -TimeoutSec 3
-                }
             }
 
             if (-not $process.HasExited) {
@@ -512,30 +463,25 @@ function Execute-RemoteJob {
             }
             $exitCode = if ($process.HasExited) { $process.ExitCode } else { 1 }
 
-            $line = $null
-            while ($logQueue.TryDequeue([ref]$line)) {
-                if ($line.StartsWith("OUT:")) {
-                    $data = $line.Substring(4)
-                    if ($stdoutTotalLength -lt $maxCharLimit) {
-                        $stdoutCollector.Add($data)
-                        $stdoutTotalLength += $data.Length
-                    }
-                } elseif ($line.StartsWith("ERR:")) {
-                    $data = $line.Substring(4)
-                    if ($stderrTotalLength -lt $maxCharLimit) {
-                        $stderrCollector.Add($data)
-                        $stderrTotalLength += $data.Length
-                    }
+            try {
+                $outText = $stdoutTask.Result
+                if (-not [string]::IsNullOrEmpty($outText)) {
+                    $stdoutCollector.Add($outText.TrimEnd())
                 }
-            }
+            } catch {}
+
+            try {
+                $errText = $stderrTask.Result
+                if (-not [string]::IsNullOrEmpty($errText)) {
+                    $stderrCollector.Add($errText.TrimEnd())
+                }
+            } catch {}
         }
         catch {
             $exitCode = 1
             $stderrCollector.Add("Execution exception: $_")
         }
         finally {
-            if ($jobStdout) { try { Unregister-Event -SourceIdentifier $jobStdout.Name -ErrorAction SilentlyContinue } catch {} }
-            if ($jobStderr) { try { Unregister-Event -SourceIdentifier $jobStderr.Name -ErrorAction SilentlyContinue } catch {} }
             if (Test-Path $tempScriptPath) { Remove-Item $tempScriptPath -Force -ErrorAction SilentlyContinue }
         }
     }
