@@ -1,4 +1,6 @@
 ﻿param (
+    [string]$ApiKey,
+    [string]$GatewayUrl,
     [string]$FirebaseUrl = "https://uat-api-agent-default-rtdb.firebaseio.com/",
     [string]$SecretKey,
     [string]$Mode,
@@ -18,33 +20,108 @@
 $OutputEncoding = [System.Text.Encoding]::UTF8
 [Console]::OutputEncoding = [System.Text.Encoding]::UTF8
 
-# Enable TLS 1.2 security protocol
+# Enable TLS 1.2 security protocol and connection pool limit
 try {
     [System.Net.ServicePointManager]::SecurityProtocol = 3072 -bor 768 -bor 192
+    [System.Net.ServicePointManager]::DefaultConnectionLimit = 128
+    [System.Net.ServicePointManager]::Expect100Continue = $false
+    [System.Net.ServicePointManager]::MaxServicePointIdleTime = 5000
 } catch {}
 [System.Net.ServicePointManager]::ServerCertificateValidationCallback = { $true }
 
-# Native .NET HTTP Client Helper (Zero-Dependency 100%)
+# กำหนด BaseUrl สำหรับ Gateway / Command Board
+$BaseUrl = if (-not [string]::IsNullOrWhiteSpace($GatewayUrl)) { $GatewayUrl } else { $FirebaseUrl }
+if ($BaseUrl -notlike "*/") {
+    $BaseUrl = $BaseUrl + "/"
+}
+
+# ฟังก์ชันจัดการ API Key ประจำเครื่อง (Local Machine Persistence)
+function Get-OrPromptJavisApiKey {
+    param([string]$ArgKey)
+
+    if (-not [string]::IsNullOrWhiteSpace($ArgKey)) {
+        return $ArgKey.Trim()
+    }
+    if (-not [string]::IsNullOrWhiteSpace($env:BB_JAVIS_API_KEY)) {
+        return $env:BB_JAVIS_API_KEY.Trim()
+    }
+
+    $configDir = Join-Path $env:LOCALAPPDATA "BB_Javis"
+    $configFile = Join-Path $configDir "config.json"
+    if (Test-Path $configFile) {
+        try {
+            $cfg = Get-Content $configFile -Raw -Encoding UTF8 | ConvertFrom-Json
+            if ($cfg -and -not [string]::IsNullOrWhiteSpace($cfg.apiKey)) {
+                return $cfg.apiKey.Trim()
+            }
+        } catch {}
+    }
+
+    Write-Host ""
+    Write-Host "======================================================================" -ForegroundColor DarkCyan
+    Write-Host "                  BB_JAVIS ENTERPRISE AUTHENTICATION                  " -ForegroundColor Yellow
+    Write-Host "======================================================================" -ForegroundColor DarkCyan
+    Write-Host "  [!] ไม่พบ API Key บนเครื่องนี้ ($configFile)" -ForegroundColor Yellow
+    Write-Host "  ระบบจะบันทึกจำไว้ในเครื่องนี้อัตโนมัติ เพื่อให้ท่านไม่ต้องพิมพ์ซ้ำในครั้งต่อไป" -ForegroundColor Gray
+    Write-Host "----------------------------------------------------------------------" -ForegroundColor DarkGray
+    
+    $inputKey = Read-Host "  กรุณาระบุ BB_JAVIS API Key (เช่น bbj_sdpuat_...)"
+    if ([string]::IsNullOrWhiteSpace($inputKey)) {
+        Write-Host "  [!] ไม่ได้ระบุ API Key - กำลังทำงานในโหมด Default Guest Profile" -ForegroundColor DarkYellow
+        $inputKey = "bbj_guest_00000000_00000000000000000000000000000000"
+    } else {
+        $inputKey = $inputKey.Trim()
+        try {
+            if (-not (Test-Path $configDir)) { $null = New-Item -ItemType Directory -Path $configDir -Force }
+            $saveObj = @{
+                apiKey = $inputKey
+                savedAt = (Get-Date -Format "yyyy-MM-ddTHH:mm:ssZ")
+                machine = $env:COMPUTERNAME
+            }
+            $json = $saveObj | ConvertTo-Json
+            $utf8NoBom = New-Object System.Text.UTF8Encoding($false)
+            [System.IO.File]::WriteAllText($configFile, $json, $utf8NoBom)
+            Write-Host "  [SAVED] บันทึก API Key ลงเครื่องเรียบร้อยแล้ว!" -ForegroundColor Green
+        } catch {}
+    }
+    Write-Host "======================================================================`n" -ForegroundColor DarkCyan
+    return $inputKey
+}
+
+$script:JavisApiKey = Get-OrPromptJavisApiKey -ArgKey $ApiKey
+
+# Native .NET HTTP Client Helper (Zero-Dependency 100% พร้อมแนบ X-Javis-Key)
 function Invoke-FirebaseHttp {
     param(
         [Parameter(Mandatory=$true)][string]$Uri,
         [string]$Method = "GET",
         [string]$Body = $null,
-        [int]$TimeoutSec = 15
+        [int]$TimeoutSec = 15,
+        [string]$Key = $script:JavisApiKey
     )
     $request = [System.Net.HttpWebRequest]::Create($Uri)
     $request.Method = $Method
     $request.Timeout = $TimeoutSec * 1000
     $request.ReadWriteTimeout = $TimeoutSec * 1000
-    $request.KeepAlive = $true
+    $request.KeepAlive = $false
+
+    if (-not [string]::IsNullOrWhiteSpace($Key)) {
+        $request.Headers["X-Javis-Key"] = $Key
+        $request.Headers["Authorization"] = "Bearer " + $Key
+    }
 
     if (-not [string]::IsNullOrEmpty($Body)) {
         $request.ContentType = "application/json; charset=utf-8"
         $bytes = [System.Text.Encoding]::UTF8.GetBytes($Body)
         $request.ContentLength = $bytes.Length
-        $reqStream = $request.GetRequestStream()
-        $reqStream.Write($bytes, 0, $bytes.Length)
-        $reqStream.Close()
+        try {
+            $reqStream = $request.GetRequestStream()
+            $reqStream.Write($bytes, 0, $bytes.Length)
+            $reqStream.Close()
+        } catch {
+            try { $request.Abort() } catch {}
+            throw $_
+        }
     }
 
     try {
@@ -53,18 +130,25 @@ function Invoke-FirebaseHttp {
         $reader = New-Object System.IO.StreamReader($respStream, [System.Text.Encoding]::UTF8)
         $result = $reader.ReadToEnd()
         $reader.Close()
+        $respStream.Close()
         $response.Close()
         return $result
     } catch [System.Net.WebException] {
         if ($_.Response) {
-            $respStream = $_.Response.GetResponseStream()
-            $reader = New-Object System.IO.StreamReader($respStream, [System.Text.Encoding]::UTF8)
-            $errResult = $reader.ReadToEnd()
-            $reader.Close()
-            $_.Response.Close()
-            return $errResult
+            try {
+                $respStream = $_.Response.GetResponseStream()
+                $reader = New-Object System.IO.StreamReader($respStream, [System.Text.Encoding]::UTF8)
+                $errResult = $reader.ReadToEnd()
+                $reader.Close()
+                $respStream.Close()
+                $_.Response.Close()
+                return $errResult
+            } catch {}
         }
+        try { $request.Abort() } catch {}
         throw $_
+    } finally {
+        try { $request.Abort() } catch {}
     }
 }
 
@@ -93,8 +177,8 @@ if ([string]::IsNullOrWhiteSpace($SecretKey)) {
     return
 }
 
-if ($FirebaseUrl -notlike "*/") {
-    $FirebaseUrl = $FirebaseUrl + "/"
+if ($BaseUrl -notlike "*/") {
+    $BaseUrl = $BaseUrl + "/"
 }
 
 # --- 2. Prompt for operation mode if invalid ---
@@ -128,7 +212,7 @@ if ($Mode -eq "Cancel") {
     Write-Host "`n[EMERGENCY CANCEL] Locating active job on Secret Key: $SecretKey..." -ForegroundColor Yellow
     $targetJobId = $JobId
     if (-not $targetJobId) {
-        $queryUrl = $FirebaseUrl + "jobs/$SecretKey.json"
+        $queryUrl = $BaseUrl + "jobs/$SecretKey.json"
         $jsonRaw = Invoke-FirebaseHttp -Uri $queryUrl -Method "GET" -TimeoutSec 5
         if ($jsonRaw -and $jsonRaw.Trim() -ne "null") {
             $jobsObj = ConvertFrom-Json -InputObject $jsonRaw -ErrorAction SilentlyContinue
@@ -144,7 +228,7 @@ if ($Mode -eq "Cancel") {
     }
     if ($targetJobId) {
         Write-Host "Sending abort signal to Job ID: $targetJobId..." -ForegroundColor Red
-        $abortUrl = $FirebaseUrl + "jobs/$SecretKey/$targetJobId/abort.json"
+        $abortUrl = $BaseUrl + "jobs/$SecretKey/$targetJobId/abort.json"
         $null = Invoke-FirebaseHttp -Uri $abortUrl -Method "PUT" -Body "true" -TimeoutSec 5
         Write-Host "[SUCCESS] Emergency abort signal sent successfully to $targetJobId!" -ForegroundColor Green
     } else {
@@ -309,7 +393,7 @@ elseif ($Mode -eq "Backup") {
     $finalScript = @"
 `$ConnectionString = '$escapedConn'
 `$DbName = "$DbName"
-`$FirebaseUrl = "$FirebaseUrl"
+`$FirebaseUrl = "$BaseUrl"
 `$SecretKey = "$SecretKey"
 `$JobId = "`$env:CMD_REMOTE_JOB_ID"
 `$curlPath = "`$env:CMD_REMOTE_CURL_PATH"
@@ -425,7 +509,7 @@ elseif ($Mode -eq "Download") {
     # Generate remote file zip compression and Base64 transfer script
     $finalScript = @"
 `$RemotePath = '$RemotePath'
-`$FirebaseUrl = "$FirebaseUrl"
+`$FirebaseUrl = "$BaseUrl"
 `$SecretKey = "$SecretKey"
 `$JobId = "`$env:CMD_REMOTE_JOB_ID"
 `$curlPath = "`$env:CMD_REMOTE_CURL_PATH"
@@ -628,7 +712,7 @@ $jobBody = @{
 
 Write-Host "`nPublishing job payload to cloud command board..." -ForegroundColor Yellow
 try {
-    $putUrl = $FirebaseUrl + "jobs/$SecretKey/$jobId.json"
+    $putUrl = $BaseUrl + "jobs/$SecretKey/$jobId.json"
     $null = Invoke-FirebaseHttp -Uri $putUrl -Method "PUT" -Body $jobBody -TimeoutSec 15
     Write-Host "[SUCCESS] Published successfully! Job ID: $jobId (Timeout: ${TimeoutSec}s)" -ForegroundColor Green
 }
@@ -649,7 +733,7 @@ $script:lastPhase = ""
 $script:printedStdoutLen = 0
 $script:printedStderrLen = 0
 $script:printedRunningHeader = $false
-$script:checkUrl = $FirebaseUrl + "jobs/$SecretKey/$jobId.json"
+$script:checkUrl = $BaseUrl + "jobs/$SecretKey/$jobId.json"
 $script:isReceiveFileJob = $isReceiveFileJob
 $script:OutputDir = $OutputDir
 
@@ -787,6 +871,10 @@ try {
         try {
             $request = [System.Net.HttpWebRequest]::Create($script:checkUrl)
             $request.Accept = "text/event-stream"
+            if (-not [string]::IsNullOrWhiteSpace($script:JavisApiKey)) {
+                $request.Headers["X-Javis-Key"] = $script:JavisApiKey
+                $request.Headers["Authorization"] = "Bearer " + $script:JavisApiKey
+            }
             $remTimeout = [Math]::Max(5000, [int](($TimeoutSec - $stopwatch.Elapsed.TotalSeconds) * 1000))
             $request.Timeout = $remTimeout
             $request.ReadWriteTimeout = $remTimeout

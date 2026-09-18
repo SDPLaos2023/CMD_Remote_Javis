@@ -1,12 +1,13 @@
-<# :
+﻿<# :
 @echo off
 title BB_JAVIS Remote Execution Agent
 cd /d "%~dp0"
-powershell -NoProfile -ExecutionPolicy Bypass -Command "$s=[scriptblock]::Create((Get-Content -Encoding UTF8 '%~f0') -join \"
-\"); & $s %*"
+powershell -NoProfile -ExecutionPolicy Bypass -Command "$s=[scriptblock]::Create((Get-Content -Encoding UTF8 '%~f0') -join `"`n`"); & $s %*"
 exit /b
 #>
 param (
+    [string]$ApiKey,
+    [string]$GatewayUrl,
     [string]$FirebaseUrl = "https://uat-api-agent-default-rtdb.firebaseio.com/",
     [int]$PollIntervalSec = 3
 )
@@ -15,9 +16,12 @@ param (
 $OutputEncoding = [System.Text.Encoding]::UTF8
 [Console]::OutputEncoding = [System.Text.Encoding]::UTF8
 
-# เปิดใช้งานโปรโตคอลความปลอดภัย TLS 1.2
+# เปิดใช้งานโปรโตคอลความปลอดภัย TLS 1.2 และปลดล็อก Connection Pool Limit (ป้องกัน Deadlock)
 try {
     [System.Net.ServicePointManager]::SecurityProtocol = 3072 -bor 768 -bor 192
+    [System.Net.ServicePointManager]::DefaultConnectionLimit = 128
+    [System.Net.ServicePointManager]::Expect100Continue = $false
+    [System.Net.ServicePointManager]::MaxServicePointIdleTime = 5000
 } catch {}
 [System.Net.ServicePointManager]::ServerCertificateValidationCallback = { $true }
 
@@ -44,21 +48,32 @@ function Invoke-FirebaseHttp {
         [Parameter(Mandatory=$true)][string]$Uri,
         [string]$Method = "GET",
         [string]$Body = $null,
-        [int]$TimeoutSec = 15
+        [int]$TimeoutSec = 15,
+        [string]$Key = $script:JavisApiKey
     )
     $request = [System.Net.HttpWebRequest]::Create($Uri)
     $request.Method = $Method
     $request.Timeout = $TimeoutSec * 1000
     $request.ReadWriteTimeout = $TimeoutSec * 1000
-    $request.KeepAlive = $true
+    $request.KeepAlive = $false
+
+    if (-not [string]::IsNullOrWhiteSpace($Key)) {
+        $request.Headers["X-Javis-Key"] = $Key
+        $request.Headers["Authorization"] = "Bearer " + $Key
+    }
 
     if (-not [string]::IsNullOrEmpty($Body)) {
         $request.ContentType = "application/json; charset=utf-8"
         $bytes = [System.Text.Encoding]::UTF8.GetBytes($Body)
         $request.ContentLength = $bytes.Length
-        $reqStream = $request.GetRequestStream()
-        $reqStream.Write($bytes, 0, $bytes.Length)
-        $reqStream.Close()
+        try {
+            $reqStream = $request.GetRequestStream()
+            $reqStream.Write($bytes, 0, $bytes.Length)
+            $reqStream.Close()
+        } catch {
+            try { $request.Abort() } catch {}
+            throw $_
+        }
     }
 
     try {
@@ -67,35 +82,98 @@ function Invoke-FirebaseHttp {
         $reader = New-Object System.IO.StreamReader($respStream, [System.Text.Encoding]::UTF8)
         $result = $reader.ReadToEnd()
         $reader.Close()
+        $respStream.Close()
         $response.Close()
         return $result
     } catch [System.Net.WebException] {
         if ($_.Response) {
-            $respStream = $_.Response.GetResponseStream()
-            $reader = New-Object System.IO.StreamReader($respStream, [System.Text.Encoding]::UTF8)
-            $errResult = $reader.ReadToEnd()
-            $reader.Close()
-            $_.Response.Close()
-            return $errResult
+            try {
+                $respStream = $_.Response.GetResponseStream()
+                $reader = New-Object System.IO.StreamReader($respStream, [System.Text.Encoding]::UTF8)
+                $errResult = $reader.ReadToEnd()
+                $reader.Close()
+                $respStream.Close()
+                $_.Response.Close()
+                return $errResult
+            } catch {}
         }
+        try { $request.Abort() } catch {}
         throw $_
+    } finally {
+        try { $request.Abort() } catch {}
     }
 }
 
 $utf8NoBom = New-Object System.Text.UTF8Encoding($false)
 
-# ตรวจสอบว่า Firebase URL ลงท้ายด้วย /
-if ($FirebaseUrl -notlike "*/") {
-    $FirebaseUrl = $FirebaseUrl + "/"
+# กำหนด URL ฐานข้อมูลปลายทาง (รองรับ GatewayUrl หรือ Fallback สู่ FirebaseUrl)
+$BaseUrl = if (-not [string]::IsNullOrWhiteSpace($GatewayUrl)) { $GatewayUrl } else { $FirebaseUrl }
+if ($BaseUrl -notlike "*/") {
+    $BaseUrl = $BaseUrl + "/"
 }
 
-# ฟังก์ชันสุ่ม PIN 4 หลักพร้อมตรวจสอบความซ้ำซ้อนกับ Firebase RTDB (Anti-Collision Guard)
+# ฟังก์ชันจัดการ API Key ประจำเครื่อง (Local Machine Persistence)
+function Get-OrPromptJavisApiKey {
+    param([string]$ArgKey)
+
+    if (-not [string]::IsNullOrWhiteSpace($ArgKey)) {
+        return $ArgKey.Trim()
+    }
+    if (-not [string]::IsNullOrWhiteSpace($env:BB_JAVIS_API_KEY)) {
+        return $env:BB_JAVIS_API_KEY.Trim()
+    }
+
+    $configDir = Join-Path $env:LOCALAPPDATA "BB_Javis"
+    $configFile = Join-Path $configDir "config.json"
+    if (Test-Path $configFile) {
+        try {
+            $cfg = Get-Content $configFile -Raw -Encoding UTF8 | ConvertFrom-Json
+            if ($cfg -and -not [string]::IsNullOrWhiteSpace($cfg.apiKey)) {
+                return $cfg.apiKey.Trim()
+            }
+        } catch {}
+    }
+
+    Write-Host ""
+    Write-Host "======================================================================" -ForegroundColor DarkCyan
+    Write-Host "                  BB_JAVIS ENTERPRISE AUTHENTICATION                  " -ForegroundColor Yellow
+    Write-Host "======================================================================" -ForegroundColor DarkCyan
+    Write-Host "  [!] ไม่พบ API Key บนเครื่องนี้ ($configFile)" -ForegroundColor Yellow
+    Write-Host "  ระบบจะบันทึกจำไว้ในเครื่องนี้อัตโนมัติ เพื่อให้ท่านไม่ต้องพิมพ์ซ้ำในครั้งต่อไป" -ForegroundColor Gray
+    Write-Host "----------------------------------------------------------------------" -ForegroundColor DarkGray
+    
+    $inputKey = Read-Host "  กรุณาระบุ BB_JAVIS API Key (เช่น bbj_sdpuat_...)"
+    if ([string]::IsNullOrWhiteSpace($inputKey)) {
+        Write-Host "  [!] ไม่ได้ระบุ API Key - กำลังทำงานในโหมด Default Guest Profile" -ForegroundColor DarkYellow
+        $inputKey = "bbj_guest_00000000_00000000000000000000000000000000"
+    } else {
+        $inputKey = $inputKey.Trim()
+        try {
+            if (-not (Test-Path $configDir)) { $null = New-Item -ItemType Directory -Path $configDir -Force }
+            $saveObj = @{
+                apiKey = $inputKey
+                savedAt = (Get-Date -Format "yyyy-MM-ddTHH:mm:ssZ")
+                machine = $env:COMPUTERNAME
+            }
+            $json = $saveObj | ConvertTo-Json
+            $utf8NoBom = New-Object System.Text.UTF8Encoding($false)
+            [System.IO.File]::WriteAllText($configFile, $json, $utf8NoBom)
+            Write-Host "  [SAVED] บันทึก API Key ลงเครื่องเรียบร้อยแล้ว!" -ForegroundColor Green
+        } catch {}
+    }
+    Write-Host "======================================================================`n" -ForegroundColor DarkCyan
+    return $inputKey
+}
+
+$script:JavisApiKey = Get-OrPromptJavisApiKey -ArgKey $ApiKey
+
+# ฟังก์ชันสุ่ม PIN 4 หลักพร้อมตรวจสอบความซ้ำซ้อนกับ Command Board (Anti-Collision Guard)
 function Get-UniqueSecretKey {
-    param([string]$BaseUrl)
+    param([string]$TargetBaseUrl)
     for ($attempt = 0; $attempt -lt 15; $attempt++) {
         $candidate = (Get-Random -Minimum 1000 -Maximum 10000).ToString()
         try {
-            $checkUrl = $BaseUrl + "jobs/$candidate.json?shallow=true"
+            $checkUrl = $TargetBaseUrl + "jobs/$candidate.json?shallow=true"
             $existing = Invoke-FirebaseHttp -Uri $checkUrl -Method "GET" -TimeoutSec 5
             if ([string]::IsNullOrWhiteSpace($existing) -or $existing.Trim() -eq "null") {
                 return $candidate
@@ -107,15 +185,31 @@ function Get-UniqueSecretKey {
     return (Get-Random -Minimum 1000 -Maximum 10000).ToString()
 }
 
-$SecretKey = Get-UniqueSecretKey -BaseUrl $FirebaseUrl
+$SecretKey = Get-UniqueSecretKey -TargetBaseUrl $BaseUrl
+
+# สกัดข้อมูล Tenant จาก API Key
+$displayTenant = "Default"
+$keyParts = $script:JavisApiKey.Split('_')
+if ($keyParts.Length -ge 2 -and $keyParts[0] -eq 'bbj') {
+    $displayTenant = $keyParts[1].ToUpper()
+}
+$maskedKey = if ($script:JavisApiKey.Length -gt 15) {
+    $script:JavisApiKey.Substring(0, 12) + "..." + $script:JavisApiKey.Substring($script:JavisApiKey.Length - 4)
+} else {
+    "Configured"
+}
 
 # แสดงแบนเนอร์ข้อมูลระบบและรหัส Secret Key แบบ Professional
 Write-Host "======================================================================" -ForegroundColor DarkCyan
-Write-Host "                    BB_JAVIS REMOTE (ZERO-TOUCH C2)                   " -ForegroundColor Yellow
+Write-Host "              BB_JAVIS ENTERPRISE REMOTE EXECUTION AGENT              " -ForegroundColor Yellow
 Write-Host "======================================================================" -ForegroundColor DarkCyan
 Write-Host "  -> Remote Secret Key : " -NoNewline -ForegroundColor Gray
 Write-Host "[ $SecretKey ]" -NoNewline -ForegroundColor Green
 Write-Host " (ACTIVE)" -ForegroundColor Yellow
+Write-Host "  -> Tenant Workspace  : " -NoNewline -ForegroundColor Gray
+Write-Host "[$displayTenant]" -ForegroundColor Cyan
+Write-Host "  -> API Key Security  : " -NoNewline -ForegroundColor Gray
+Write-Host "$maskedKey (Persistent)" -ForegroundColor Green
 Write-Host "  -> Connection Status : " -NoNewline -ForegroundColor Gray
 Write-Host "Real-Time SSE Connected (<10ms In-Memory Turbo)" -ForegroundColor Green
 Write-Host "  -> Engine Type       : " -NoNewline -ForegroundColor Gray
@@ -130,8 +224,8 @@ Write-Host "====================================================================
 
 # ลงทะเบียน PIN บน Cloud Command Board ป้องกันผู้อื่นสุ่มชน
 try {
-    $claimUrl = $FirebaseUrl + "jobs/$SecretKey/claim.json"
-    $claimBody = '{"claimed_at":"' + (Get-Date -Format "yyyy-MM-dd HH:mm:ss") + '","status":"active","engine":"realtime_sse"}'
+    $claimUrl = $BaseUrl + "jobs/$SecretKey/claim.json"
+    $claimBody = '{"claimed_at":"' + (Get-Date -Format "yyyy-MM-dd HH:mm:ss") + '","status":"active","engine":"realtime_sse","tenant":"' + $displayTenant + '"}'
     $null = Invoke-FirebaseHttp -Uri $claimUrl -Method "PUT" -Body $claimBody -TimeoutSec 10
 } catch {}
 
@@ -142,7 +236,7 @@ $cleanExitAction = {
     $script:isExiting = $true
     Write-Host "`n[SELF-DESTRUCT] Terminating session and cleaning Cloud board..." -ForegroundColor Yellow
     try {
-        $delUrl = $FirebaseUrl + "jobs/$SecretKey.json"
+        $delUrl = $BaseUrl + "jobs/$SecretKey.json"
         $null = Invoke-FirebaseHttp -Uri $delUrl -Method "DELETE" -TimeoutSec 5
     } catch {}
     # เคลียร์ไฟล์ชั่วคราวใน TEMP (Zero-Footprint)
@@ -525,9 +619,13 @@ try {
     while (-not $script:isExiting) {
         $sseActive = $false
         try {
-            $streamUrl = $FirebaseUrl + "jobs/$SecretKey.json"
+            $streamUrl = $BaseUrl + "jobs/$SecretKey.json"
             $request = [System.Net.HttpWebRequest]::Create($streamUrl)
             $request.Accept = "text/event-stream"
+            if (-not [string]::IsNullOrWhiteSpace($script:JavisApiKey)) {
+                $request.Headers["X-Javis-Key"] = $script:JavisApiKey
+                $request.Headers["Authorization"] = "Bearer " + $script:JavisApiKey
+            }
             $request.Timeout = 180000
             $request.ReadWriteTimeout = 180000
 
@@ -578,11 +676,13 @@ try {
                                     }
 
                                     if ($targetJobId -and $targetJobId -ne $lastProcessedJob) {
-                                        $reader.Close()
-                                        $response.Close()
+                                        try { $reader.Close() } catch {}
+                                        try { $stream.Close() } catch {}
+                                        try { $response.Close() } catch {}
+                                        try { $request.Abort() } catch {}
                                         $sseActive = $false
 
-                                        Execute-RemoteJob -JobId $targetJobId -JobDetails $targetJobDetails -BaseUrl $FirebaseUrl -CurrentKey $SecretKey
+                                        Execute-RemoteJob -JobId $targetJobId -JobDetails $targetJobDetails -BaseUrl $BaseUrl -CurrentKey $SecretKey
                                         $lastProcessedJob = $targetJobId
                                         break
                                     }
@@ -594,21 +694,25 @@ try {
             }
 
             if ($sseActive) {
-                $reader.Close()
-                $response.Close()
+                try { $reader.Close() } catch {}
+                try { $stream.Close() } catch {}
+                try { $response.Close() } catch {}
+                try { $request.Abort() } catch {}
+                $sseActive = $false
             }
         }
         catch {
+            try { if ($request) { $request.Abort() } } catch {}
             # หาก SSE หลุด หรือมีข้อจำกัดด้านเน็ตเวิร์ก ให้สลับมาใช้ Adaptive Fast Polling ชั่วคราว
             try {
-                $queryUrl = $FirebaseUrl + "jobs/$SecretKey.json"
+                $queryUrl = $BaseUrl + "jobs/$SecretKey.json"
                 $jsonRaw = Invoke-FirebaseHttp -Uri $queryUrl -Method "GET" -TimeoutSec 5
                 if ($jsonRaw -and $jsonRaw.Trim() -ne "null" -and $jsonRaw.Trim().StartsWith("{")) {
                     $jobs = ConvertFrom-Json -InputObject $jsonRaw.Trim() -ErrorAction SilentlyContinue
                     if ($jobs -and $jobs -is [System.Management.Automation.PSCustomObject]) {
                         foreach ($prop in $jobs.PSObject.Properties) {
                             if ($prop.Value -and $prop.Value.status -eq "pending" -and $prop.Name -ne $lastProcessedJob) {
-                                Execute-RemoteJob -JobId $prop.Name -JobDetails $prop.Value -BaseUrl $FirebaseUrl -CurrentKey $SecretKey
+                                Execute-RemoteJob -JobId $prop.Name -JobDetails $prop.Value -BaseUrl $BaseUrl -CurrentKey $SecretKey
                                 $lastProcessedJob = $prop.Name
                                 break
                             }
@@ -621,5 +725,6 @@ try {
     }
 }
 finally {
+    try { if ($request) { $request.Abort() } } catch {}
     & $cleanExitAction
 }

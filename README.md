@@ -6,6 +6,9 @@
 
 ## 🚀 จุดเด่นของระบบ (Key Features)
 
+* **Enterprise Security Gateway (Cloudflare Edge WAF):** ซ่อนโครงสร้างฐานข้อมูลเบื้องหลัง 100% พร้อมระบบ Anti-Scan ป้องกันการเจาะระบบและการแอบส่องคำสั่งจากภายนอก
+* **Multi-Tenant Data Isolation:** แยกพื้นที่การทำงานของแต่ละองค์กร/ทีมอย่างเด็ดขาดด้วย HMAC-SHA256 Cryptographic API Key
+* **Local Machine Profile Persistence:** ระบบจดจำ API Key ลงเครื่องนั้นๆ อัตโนมัติ (`config.json`) กรอกครั้งแรกครั้งเดียว ไม่ต้องพิมพ์ซ้ำบ่อยๆ
 * **Real-Time SSE Push Engine (<100ms):** ตอบสนองคำสั่งทันทีด้วยเทคโนโลยี Server-Sent Events ไม่ต้องรอรอบ Polling 5 วินาที
 * **Zero-Dependency 100%:** ขับเคลื่อนด้วย Native .NET HTTP ทำงานได้ทันทีบน Windows Server ทุกรุ่น ไม่ต้องพึ่งพาหรือดาวน์โหลด `curl.exe`
 * **Zero-Touch One-Link Setup:** สั่งรันบนเซิร์ฟเวอร์ปลายทางได้ทันทีด้วย One-Link บรรทัดเดียว
@@ -118,8 +121,32 @@ http://127.0.0.1:5999/live?key=2944
 
 ---
 
-## 🛡️ มาตรฐานความปลอดภัย (Security Architecture)
-* **Anti-Collision Protection:** สุ่ม PIN พร้อมตรวจสอบสถานะกับระบบคลาวด์ ป้องกันการชนกันของรหัสเชื่อมต่อ
+## 🛡️ มาตรฐานความปลอดภัยระดับองค์กร (Enterprise Security Architecture)
+
+### 1. ระบบรักษาความปลอดภัยด้วย Gateway และ Tenant API Key
+* **Cloudflare Edge Reverse Proxy:** สคริปต์เชื่อมต่อผ่าน Cloudflare Worker Gateway แทนการเชื่อมต่อฐานข้อมูลคลาวด์โดยตรง ป้องกันการแกะดู URL หรือสิทธิ์ภายในองค์กร 100%
+* **HMAC-SHA256 Cryptographic API Key:** คีย์ความปลอดภัยมาตรฐานสากล คำนวณความถูกต้องในระดับ Sub-millisecond ป้องกันการปลอมแปลงและไม่ต้องพึ่งพาฐานข้อมูลจัดเก็บ Key
+* **Multi-Tenant Isolation:** แยกข้อมูลและคำสั่งระหว่างองค์กรอย่างเด็ดขาด (`/tenants/{tenant_id}/jobs/{pin}`) ผู้ใช้จากภายนอกไม่มีสิทธิ์มองเห็นหรือสั่งงานเครื่องของเราได้
+* **WAF Anti-Scan Guard:** ระบบตัดการเชื่อมต่อและตอบกลับ `403 Forbidden` ทันทีเมื่อตรวจพบความพยายามสแกนโหนดรวม (Shallow List) หรือพยายามเดา PIN
 * **Strict Secret Key Matching:** คำสั่งทุกคำสั่งต้องมีรหัส PIN ตรงกับหน้าจอเครื่องเป้าหมายเท่านั้น
 * **Ephemeral Lifecycle & Self-Destruct:** ลบ Payload ทันทีหลังทำงานเสร็จ และลบ Session บน Cloud ทันทีที่ปิดหน้าต่าง
 * **Zero-Footprint:** ไม่มีไฟล์ขยะหรือ Log ตกค้างในเครื่องเป้าหมาย
+
+---
+
+## 🔑 การสร้างและจัดการ API Key (API Key Generation)
+
+ผู้ดูแลระบบสามารถสร้าง API Key ประจำทีมหรือเครื่องได้ง่ายๆ ผ่าน `gen_key.bat`:
+
+```cmd
+# 1. สั่งสร้าง Key สำหรับ Tenant "sdpuat" และบันทึกจำไว้ในเครื่องนี้ทันที:
+gen_key.bat -Tenant "sdpuat" -SaveToThisMachine
+
+# 2. สร้าง Key ให้ทีมอื่นหรือลูกค้า (พร้อมคัดลอกลง Clipboard):
+gen_key.bat -Tenant "client_a" -CopyToClipboard
+```
+
+> [!TIP]
+> **ระบบจดจำคีย์อัตโนมัติ (Local Machine Persistence):**
+> เมื่อท่านระบุ API Key ในเครื่องครั้งแรก สคริปต์จะบันทึกจำไว้ใน `$env:LOCALAPPDATA\BB_Javis\config.json` อัตโนมัติ ทำให้การรันในครั้งต่อไปทำงานได้ทันทีแบบ 1-Click โดยไม่ต้องพิมพ์ซ้ำ!
+

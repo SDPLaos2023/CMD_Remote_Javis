@@ -1,0 +1,9 @@
+name = "bb-javis-gateway"
+main = "worker.js"
+compatibility_date = "2024-09-01"
+
+[vars]
+FIREBASE_RTDB_URL = "https://uat-api-agent-default-rtdb.firebaseio.com"
+JAVIS_MASTER_SECRET = "JAVIS_SECURE_ENTERPRISE_MASTER_KEY_2026"
+# หากเปิด Database Secret ใน Firebase สามารถใส่ FIREBASE_AUTH_SECRET เพิ่มได้
+# FIREBASE_AUTH_SECRET = ""
