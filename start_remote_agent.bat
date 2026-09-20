@@ -1,4 +1,4 @@
-﻿<# :
+<# :
 @echo off
 title BB_JAVIS Remote Execution Agent
 cd /d "%~dp0"

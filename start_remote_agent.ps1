@@ -1,4 +1,4 @@
-﻿param (
+param (
     [string]$ApiKey,
     [string]$GatewayUrl,
     [string]$FirebaseUrl = "https://uat-api-agent-default-rtdb.firebaseio.com/",
