@@ -9,6 +9,7 @@ param (
     [string]$ApiKey,
     [string]$GatewayUrl,
     [string]$FirebaseUrl = "https://uat-api-agent-default-rtdb.firebaseio.com/",
+    [string]$SecretKey,
     [int]$PollIntervalSec = 3
 )
 
@@ -59,7 +60,9 @@ function Invoke-FirebaseHttp {
 
     if (-not [string]::IsNullOrWhiteSpace($Key)) {
         $request.Headers["X-Javis-Key"] = $Key
-        $request.Headers["Authorization"] = "Bearer " + $Key
+        if ($Uri -notlike "*firebaseio.com*") {
+            $request.Headers["Authorization"] = "Bearer " + $Key
+        }
     }
 
     if (-not [string]::IsNullOrEmpty($Body)) {
@@ -185,7 +188,11 @@ function Get-UniqueSecretKey {
     return (Get-Random -Minimum 1000 -Maximum 10000).ToString()
 }
 
-$SecretKey = Get-UniqueSecretKey -TargetBaseUrl $BaseUrl
+if ([string]::IsNullOrWhiteSpace($SecretKey)) {
+    $SecretKey = Get-UniqueSecretKey -TargetBaseUrl $BaseUrl
+} else {
+    $SecretKey = $SecretKey.Trim()
+}
 
 # สกัดข้อมูล Tenant จาก API Key
 $displayTenant = "Default"
@@ -231,6 +238,7 @@ try {
 
 # ระบบ Self-Destruct Clean Exit: ทำลายข้อมูล Session ทันทีเมื่อปิดโปรแกรมหรือกด Ctrl+C
 $script:isExiting = $false
+$script:restartRequested = $false
 $cleanExitAction = {
     if ($script:isExiting) { return }
     $script:isExiting = $true
@@ -283,6 +291,23 @@ function Execute-RemoteJob {
     $timeoutSec = 600
     if ($JobDetails.timeout_sec -and [int]::TryParse($JobDetails.timeout_sec, [ref]$null)) {
         $timeoutSec = [Math]::Max(10, [int]$JobDetails.timeout_sec)
+    }
+
+    # ตรวจสอบคำสั่งพิเศษ System Restart (In-Place Agent Reset)
+    if ($command -eq "__JAVIS_SYSTEM_RESTART__" -or $command -eq "restart-agent") {
+        Write-Host " -> [SYSTEM RESTART] Special restart command received! Scheduling in-place reset..." -ForegroundColor Yellow
+        $restartRes = @{
+            status = "completed"
+            exit_code = 0
+            stdout = "[SYSTEM RESTART] Agent restart acknowledged. Performing in-place reset while maintaining Secret Key: [ $CurrentKey ]"
+            stderr = ""
+            completed_at = (Get-Date -Format "yyyy-MM-dd HH:mm:ss")
+        } | ConvertTo-Json -Compress
+        $updateUrl = $BaseUrl + "jobs/$CurrentKey/$JobId.json"
+        $null = Invoke-FirebaseHttp -Uri $updateUrl -Method "PATCH" -Body $restartRes -TimeoutSec 5
+        
+        $script:restartRequested = $true
+        return
     }
 
     # ตรวจสอบคำสั่งที่มีความเสี่ยงสูง
@@ -617,6 +642,36 @@ $lastProcessedJob = ""
 # Main Execution Loop: Dual-Mode (Real-Time SSE Push + Adaptive Polling Fallback)
 try {
     while (-not $script:isExiting) {
+        if ($script:restartRequested) {
+            $script:restartRequested = $false
+            Write-Host "`n======================================================================" -ForegroundColor DarkYellow
+            Write-Host "         [SYSTEM RESTART] In-Place Agent Reset in Progress...         " -ForegroundColor Yellow
+            Write-Host "======================================================================" -ForegroundColor DarkYellow
+            Write-Host "  -> Remote Secret Key : " -NoNewline -ForegroundColor Gray
+            Write-Host "[ $SecretKey ]" -NoNewline -ForegroundColor Green
+            Write-Host " (MAINTAINED)" -ForegroundColor Yellow
+            Write-Host "  -> State Reset       : Clearing Sockets, Cache & In-Memory Engine" -ForegroundColor Cyan
+            
+            # ทำความสะอาดไฟล์ชั่วคราวและหน่วยความจำ
+            Get-ChildItem -Path $env:TEMP -Filter "remote_script_*.ps1" -ErrorAction SilentlyContinue | Remove-Item -Force -ErrorAction SilentlyContinue
+            Get-ChildItem -Path $env:TEMP -Filter "agent_*_temp.json" -ErrorAction SilentlyContinue | Remove-Item -Force -ErrorAction SilentlyContinue
+            try {
+                [GC]::Collect()
+                [GC]::WaitForPendingFinalizers()
+            } catch {}
+            
+            # ยืนยัน Claim บน Cloud Command Board อีกครั้ง
+            try {
+                $claimUrl = $BaseUrl + "jobs/$SecretKey/claim.json"
+                $claimBody = '{"claimed_at":"' + (Get-Date -Format "yyyy-MM-dd HH:mm:ss") + '","status":"active","engine":"realtime_sse","tenant":"' + $displayTenant + '","restarted_at":"' + (Get-Date -Format "yyyy-MM-dd HH:mm:ss") + '"}'
+                $null = Invoke-FirebaseHttp -Uri $claimUrl -Method "PUT" -Body $claimBody -TimeoutSec 10
+            } catch {}
+            
+            Write-Host "  -> Status            : Reset complete. Ready for incoming commands!" -ForegroundColor Green
+            Write-Host "======================================================================`n" -ForegroundColor DarkYellow
+            Start-Sleep -Milliseconds 500
+        }
+
         $sseActive = $false
         try {
             $streamUrl = $BaseUrl + "jobs/$SecretKey.json"
@@ -624,7 +679,9 @@ try {
             $request.Accept = "text/event-stream"
             if (-not [string]::IsNullOrWhiteSpace($script:JavisApiKey)) {
                 $request.Headers["X-Javis-Key"] = $script:JavisApiKey
-                $request.Headers["Authorization"] = "Bearer " + $script:JavisApiKey
+                if ($streamUrl -notlike "*firebaseio.com*") {
+                    $request.Headers["Authorization"] = "Bearer " + $script:JavisApiKey
+                }
             }
             $request.Timeout = 180000
             $request.ReadWriteTimeout = 180000

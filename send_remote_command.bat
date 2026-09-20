@@ -118,7 +118,9 @@ function Invoke-FirebaseHttp {
 
     if (-not [string]::IsNullOrWhiteSpace($Key)) {
         $request.Headers["X-Javis-Key"] = $Key
-        $request.Headers["Authorization"] = "Bearer " + $Key
+        if ($Uri -notlike "*firebaseio.com*") {
+            $request.Headers["Authorization"] = "Bearer " + $Key
+        }
     }
 
     if (-not [string]::IsNullOrEmpty($Body)) {
@@ -709,237 +711,349 @@ try {
 }
 
 
-# --- 4. Submit job JSON metadata payload to Firebase ---
-$jobId = "job-" + [Guid]::NewGuid().ToString().Substring(0, 8)
-$jobBody = @{
-    secret_key = $SecretKey
-    script_content = $finalScript
-    status = "pending"
-    execution_mode = $ExecutionMode
-    created_at = (Get-Date -Format "yyyy-MM-dd HH:mm:ss")
-    timeout_sec = $TimeoutSec
-    abort = $false
-} | ConvertTo-Json -Compress
-
-Write-Host "`nPublishing job payload to cloud command board..." -ForegroundColor Yellow
-try {
-    $putUrl = $BaseUrl + "jobs/$SecretKey/$jobId.json"
-    $null = Invoke-FirebaseHttp -Uri $putUrl -Method "PUT" -Body $jobBody -TimeoutSec 15
-    Write-Host "[SUCCESS] Published successfully! Job ID: $jobId (Timeout: ${TimeoutSec}s)" -ForegroundColor Green
-}
-catch {
-    Write-Host "[ERROR] Failed to connect to Firebase: $_" -ForegroundColor Red
-    return
-}
-
-# --- 5. Start listening loop (Firebase SSE Push Engine + Graceful Polling Fallback) ---
-Write-Host "`nListening and waiting for CMD_Remote Agent response (Firebase SSE Push Engine)..." -ForegroundColor Yellow
-$stopwatch = [System.Diagnostics.Stopwatch]::StartNew()
-$script:completed = $false
-
-$script:lastHeartbeatValue = ""
-$script:lastActiveTime = [DateTime]::Now
-$script:lastPhase = ""
-
-$script:printedStdoutLen = 0
-$script:printedStderrLen = 0
-$script:printedRunningHeader = $false
-$script:checkUrl = $BaseUrl + "jobs/$SecretKey/$jobId.json"
-$script:isReceiveFileJob = $isReceiveFileJob
-$script:OutputDir = $OutputDir
-
-function Process-JobStatusObject {
-    param([PSCustomObject]$statusCheck)
-    if (-not $statusCheck) { return $false }
-    
-    $status = $statusCheck.status
-    $currentHeartbeat = $statusCheck.last_heartbeat
-    $currentPhase = $statusCheck.progress_phase
-    
-    if ($currentHeartbeat -and $currentHeartbeat -ne $script:lastHeartbeatValue) {
-        $script:lastHeartbeatValue = $currentHeartbeat
-        $script:lastActiveTime = [DateTime]::Now
-    }
-    
-    if ($currentPhase -and $currentPhase -ne $script:lastPhase) {
-        $script:lastPhase = $currentPhase
-        Write-Host "`n[Phase Status]: $script:lastPhase" -ForegroundColor Cyan
-        $script:lastActiveTime = [DateTime]::Now
-    }
-    
-    if (-not $script:isReceiveFileJob) {
-        $stdoutVal = $statusCheck.stdout
-        if ($stdoutVal -and $stdoutVal.Length -gt $script:printedStdoutLen) {
-            if (-not $script:printedRunningHeader) {
-                Write-Host "`n[Console Outputs (Real-time)]:" -ForegroundColor White
-                $script:printedRunningHeader = $true
-            }
-            $newStdout = $stdoutVal.Substring($script:printedStdoutLen)
-            Write-Host -NoNewline $newStdout -ForegroundColor Gray
-            $script:printedStdoutLen = $stdoutVal.Length
-            $script:lastActiveTime = [DateTime]::Now
-        }
-        
-        $stderrVal = $statusCheck.stderr
-        if ($stderrVal -and $stderrVal.Length -gt $script:printedStderrLen) {
-            if (-not $script:printedRunningHeader) {
-                Write-Host "`n[Console Outputs (Real-time)]:" -ForegroundColor White
-                $script:printedRunningHeader = $true
-            }
-            $newStderr = $stderrVal.Substring($script:printedStderrLen)
-            Write-Host -NoNewline $newStderr -ForegroundColor DarkRed
-            $script:printedStderrLen = $stderrVal.Length
-            $script:lastActiveTime = [DateTime]::Now
-        }
-    }
-    
-    if ($status -eq "completed" -or $status -eq "failed" -or $status -eq "cancelled") {
-        Write-Host "`n`n==========================================" -ForegroundColor Green
-        Write-Host "CMD_Remote Output Report (Status: $status)" -ForegroundColor Green
-        Write-Host "==========================================" -ForegroundColor Green
-        
-        if (-not $script:isReceiveFileJob) {
-            $stdoutVal = $statusCheck.stdout
-            if ($stdoutVal -and $stdoutVal.Length -gt $script:printedStdoutLen) {
-                $newStdout = $stdoutVal.Substring($script:printedStdoutLen)
-                Write-Host -NoNewline $newStdout -ForegroundColor Gray
-            }
-            $stderrVal = $statusCheck.stderr
-            if ($stderrVal -and $stderrVal.Length -gt $script:printedStderrLen) {
-                $newStderr = $stderrVal.Substring($script:printedStderrLen)
-                Write-Host -NoNewline $newStderr -ForegroundColor DarkRed
-            }
-        }
-        
-        if ($script:isReceiveFileJob -and $status -eq "completed") {
-            if ($statusCheck.stdout -match '---FILE_DATA_START---[\r\n]+(?<json>[\s\S]+?)[\r\n]+---FILE_DATA_END---') {
-                $jsonRaw = $Matches['json'].Trim()
-                try {
-                    $payload = ConvertFrom-Json -InputObject $jsonRaw
-                    $fileName = $payload.file_name
-                    $fileData = $payload.file_data
-                    
-                    if (-not (Test-Path $script:OutputDir)) {
-                        $null = New-Item -ItemType Directory -Path $script:OutputDir -Force
-                    }
-                    $zipPath = Join-Path $script:OutputDir $fileName
-                    $bakPath = Join-Path $script:OutputDir ([System.IO.Path]::GetFileNameWithoutExtension($fileName))
-                    
-                    Write-Host "`n[FILE RETRIEVAL] Decoding Base64 data..." -ForegroundColor Yellow
-                    $bytes = [Convert]::FromBase64String($fileData)
-                    [System.IO.File]::WriteAllBytes($zipPath, $bytes)
-                    
-                    Write-Host "[ARCHIVE EXTRACT] Extracting archive file..." -ForegroundColor Yellow
-                    try {
-                        Add-Type -AssemblyName "System.IO.Compression.FileSystem"
-                    } catch {}
-                    
-                    if (Test-Path $bakPath) { Remove-Item $bakPath -Force -Recurse }
-                    [System.IO.Compression.ZipFile]::ExtractToDirectory($zipPath, $script:OutputDir)
-                    
-                    if (Test-Path $zipPath) { Remove-Item $zipPath -Force }
-                    
-                    Write-Host "[SUCCESS] File retrieved and decoded successfully!" -ForegroundColor Green
-                    Write-Host "Output Path: $bakPath" -ForegroundColor White
-                }
-                catch {
-                    Write-Host "[ERROR] Decoding or extraction failed: $_" -ForegroundColor Red
-                }
-            } else {
-                Write-Host "[ERROR] Missing payload data key." -ForegroundColor Red
-            }
-        }
-        
-        Write-Host "`nCompleted at: $($statusCheck.completed_at)" -ForegroundColor Gray
-        Write-Host "Exit Code: $($statusCheck.exit_code)" -ForegroundColor Gray
-        Write-Host "==========================================" -ForegroundColor Green
-        
-        try {
-            $null = Invoke-FirebaseHttp -Uri $script:checkUrl -Method "DELETE" -TimeoutSec 5
-        } catch {}
-        $script:completed = $true
-        return $true
-    }
-    
-    return $false
-}
+# --- 4. Submit & Monitor Job with AI Intelligent Watchdog ---
+$maxRetries = 1
+$retryAttempt = 0
+$agentRestartDone = $false
+$finalJobSuccess = $false
 
 # ดักจับ Ctrl+C เพื่อส่งสัญญาณ Emergency Abort ไปยังเครื่องเป้าหมาย
 $senderCancelHandler = [ConsoleCancelEventHandler]{
     param($s, $e)
     Write-Host "`n`n[EMERGENCY ABORT] User requested stop! Sending abort signal to remote agent..." -ForegroundColor Red
     try {
-        $abortUrl = $script:checkUrl.Replace(".json", "/abort.json")
-        $null = Invoke-FirebaseHttp -Uri $abortUrl -Method "PUT" -Body "true" -TimeoutSec 5
-        Write-Host "[SUCCESS] Abort signal sent to Cloud board." -ForegroundColor Green
+        if (-not [string]::IsNullOrWhiteSpace($script:checkUrl)) {
+            $abortUrl = $script:checkUrl.Replace(".json", "/abort.json")
+            $null = Invoke-FirebaseHttp -Uri $abortUrl -Method "PUT" -Body "true" -TimeoutSec 5
+            Write-Host "[SUCCESS] Abort signal sent to Cloud board." -ForegroundColor Green
+        }
     } catch {}
 }
 try { [Console]::add_CancelKeyPress($senderCancelHandler) } catch {}
 
-# Main Listening Engine: Dual-Engine SSE Push Receiver
 try {
-    while ($stopwatch.Elapsed.TotalSeconds -lt $TimeoutSec -and -not $script:completed) {
+    while ($retryAttempt -le $maxRetries -and -not $finalJobSuccess) {
+        $jobId = "job-" + [Guid]::NewGuid().ToString().Substring(0, 8)
+        $jobBody = @{
+            secret_key = $SecretKey
+            script_content = $finalScript
+            status = "pending"
+            execution_mode = $ExecutionMode
+            created_at = (Get-Date -Format "yyyy-MM-dd HH:mm:ss")
+            timeout_sec = $TimeoutSec
+            abort = $false
+        } | ConvertTo-Json -Compress
+
+        $attemptLabel = if ($retryAttempt -gt 0) { " (Auto-Retry $retryAttempt/$maxRetries)" } else { "" }
+        Write-Host "`nPublishing job payload to cloud command board$attemptLabel..." -ForegroundColor Yellow
         try {
-            $request = [System.Net.HttpWebRequest]::Create($script:checkUrl)
-            $request.Accept = "text/event-stream"
-            if (-not [string]::IsNullOrWhiteSpace($script:JavisApiKey)) {
-                $request.Headers["X-Javis-Key"] = $script:JavisApiKey
-                $request.Headers["Authorization"] = "Bearer " + $script:JavisApiKey
-            }
-            $remTimeout = [Math]::Max(5000, [int](($TimeoutSec - $stopwatch.Elapsed.TotalSeconds) * 1000))
-            $request.Timeout = $remTimeout
-            $request.ReadWriteTimeout = $remTimeout
-            
-            $response = $request.GetResponse()
-            $stream = $response.GetResponseStream()
-            $reader = New-Object System.IO.StreamReader($stream, [System.Text.Encoding]::UTF8)
-            
-            $dataBuffer = [System.Text.StringBuilder]::new()
-            
-            while (-not $reader.EndOfStream -and -not $script:completed) {
-                $line = $reader.ReadLine()
-                if ($null -eq $line) { break }
-                
-                if ($line.StartsWith("data: ")) {
-                    $null = $dataBuffer.AppendLine($line.Substring(6))
+            $putUrl = $BaseUrl + "jobs/$SecretKey/$jobId.json"
+            $null = Invoke-FirebaseHttp -Uri $putUrl -Method "PUT" -Body $jobBody -TimeoutSec 15
+            Write-Host "[SUCCESS] Published successfully! Job ID: $jobId (Timeout: ${TimeoutSec}s)" -ForegroundColor Green
+        }
+        catch {
+            Write-Host "[ERROR] Failed to connect to Firebase: $_" -ForegroundColor Red
+            return
+        }
+
+        # ตัวแปรสถานะและการเฝ้าระวัง Watchdog
+        $stopwatch = [System.Diagnostics.Stopwatch]::StartNew()
+        $script:completed = $false
+        $script:jobStartTime = [DateTime]::Now
+        $script:lastActiveTime = [DateTime]::Now
+        $script:lastHeartbeatValue = ""
+        $script:lastPhase = ""
+        $script:currentStatus = "pending"
+        $script:hangDetected = $false
+        $script:hangReason = ""
+
+        $script:printedStdoutLen = 0
+        $script:printedStderrLen = 0
+        $script:printedRunningHeader = $false
+        $script:checkUrl = $BaseUrl + "jobs/$SecretKey/$jobId.json"
+        $script:isReceiveFileJob = $isReceiveFileJob
+        $script:OutputDir = $OutputDir
+
+        # ฟังก์ชันตรวจสอบความค้าง (AI Intelligent Watchdog)
+        function Test-JobHangs {
+            $now = [DateTime]::Now
+
+            # 1. ตรวจสอบ Pending Hang: หากคำสั่งยังเป็น pending นานเกิน 20 วินาที
+            if ($script:currentStatus -eq "pending") {
+                $pendingSec = ($now - $script:jobStartTime).TotalSeconds
+                if ($pendingSec -ge 20) {
+                    $script:hangDetected = $true
+                    $script:hangReason = "Pending Timeout ($([int]$pendingSec)s > 20s - ไม่พบ Agent รับงาน)"
+                    return $true
                 }
-                elseif ($line -eq "") {
-                    if ($dataBuffer.Length -gt 0) {
-                        $rawJson = $dataBuffer.ToString().Trim()
-                        [void]$dataBuffer.Clear()
-                        
-                        if ($rawJson -and $rawJson -ne "null") {
+            }
+            # 2. ตรวจสอบ Running Hang: หากสถานะเป็น running แต่นิ่งสนิทไร้ Heartbeat และไร้ Output นานเกิน 30 วินาที
+            elseif ($script:currentStatus -eq "running") {
+                $silentSec = ($now - $script:lastActiveTime).TotalSeconds
+                if ($silentSec -ge 30) {
+                    $script:hangDetected = $true
+                    $script:hangReason = "Running Stalled ($([int]$silentSec)s > 30s - คำสั่งหรือ Thread นิ่งสนิทไร้ Heartbeat)"
+                    return $true
+                }
+            }
+            return $false
+        }
+
+        # ประมวลผล Object สถานะ
+        function Process-JobStatusObject {
+            param([PSCustomObject]$statusCheck)
+            if (-not $statusCheck) { return $false }
+            
+            $status = $statusCheck.status
+            if ($status) { $script:currentStatus = $status }
+            $currentHeartbeat = $statusCheck.last_heartbeat
+            $currentPhase = $statusCheck.progress_phase
+            
+            if ($currentHeartbeat -and $currentHeartbeat -ne $script:lastHeartbeatValue) {
+                $script:lastHeartbeatValue = $currentHeartbeat
+                $script:lastActiveTime = [DateTime]::Now
+            }
+            
+            if ($currentPhase -and $currentPhase -ne $script:lastPhase) {
+                $script:lastPhase = $currentPhase
+                Write-Host "`n[Phase Status]: $script:lastPhase" -ForegroundColor Cyan
+                $script:lastActiveTime = [DateTime]::Now
+            }
+            
+            if (-not $script:isReceiveFileJob) {
+                $stdoutVal = $statusCheck.stdout
+                if ($stdoutVal -and $stdoutVal.Length -gt $script:printedStdoutLen) {
+                    if (-not $script:printedRunningHeader) {
+                        Write-Host "`n[Console Outputs (Real-time)]:" -ForegroundColor White
+                        $script:printedRunningHeader = $true
+                    }
+                    $newStdout = $stdoutVal.Substring($script:printedStdoutLen)
+                    Write-Host -NoNewline $newStdout -ForegroundColor Gray
+                    $script:printedStdoutLen = $stdoutVal.Length
+                    $script:lastActiveTime = [DateTime]::Now
+                }
+                
+                $stderrVal = $statusCheck.stderr
+                if ($stderrVal -and $stderrVal.Length -gt $script:printedStderrLen) {
+                    if (-not $script:printedRunningHeader) {
+                        Write-Host "`n[Console Outputs (Real-time)]:" -ForegroundColor White
+                        $script:printedRunningHeader = $true
+                    }
+                    $newStderr = $stderrVal.Substring($script:printedStderrLen)
+                    Write-Host -NoNewline $newStderr -ForegroundColor DarkRed
+                    $script:printedStderrLen = $stderrVal.Length
+                    $script:lastActiveTime = [DateTime]::Now
+                }
+            }
+            
+            if ($status -eq "completed" -or $status -eq "failed" -or $status -eq "cancelled") {
+                Write-Host "`n`n==========================================" -ForegroundColor Green
+                Write-Host "CMD_Remote Output Report (Status: $status)" -ForegroundColor Green
+                Write-Host "==========================================" -ForegroundColor Green
+                
+                if (-not $script:isReceiveFileJob) {
+                    $stdoutVal = $statusCheck.stdout
+                    if ($stdoutVal -and $stdoutVal.Length -gt $script:printedStdoutLen) {
+                        $newStdout = $stdoutVal.Substring($script:printedStdoutLen)
+                        Write-Host -NoNewline $newStdout -ForegroundColor Gray
+                    }
+                    $stderrVal = $statusCheck.stderr
+                    if ($stderrVal -and $stderrVal.Length -gt $script:printedStderrLen) {
+                        $newStderr = $stderrVal.Substring($script:printedStderrLen)
+                        Write-Host -NoNewline $newStderr -ForegroundColor DarkRed
+                    }
+                }
+                
+                if ($script:isReceiveFileJob -and $status -eq "completed") {
+                    if ($statusCheck.stdout -match '---FILE_DATA_START---[\r\n]+(?<json>[\s\S]+?)[\r\n]+---FILE_DATA_END---') {
+                        $jsonRaw = $Matches['json'].Trim()
+                        try {
+                            $payload = ConvertFrom-Json -InputObject $jsonRaw
+                            $fileName = $payload.file_name
+                            $fileData = $payload.file_data
+                            
+                            if (-not (Test-Path $script:OutputDir)) {
+                                $null = New-Item -ItemType Directory -Path $script:OutputDir -Force
+                            }
+                            $zipPath = Join-Path $script:OutputDir $fileName
+                            $bakPath = Join-Path $script:OutputDir ([System.IO.Path]::GetFileNameWithoutExtension($fileName))
+                            
+                            Write-Host "`n[FILE RETRIEVAL] Decoding Base64 data..." -ForegroundColor Yellow
+                            $bytes = [Convert]::FromBase64String($fileData)
+                            [System.IO.File]::WriteAllBytes($zipPath, $bytes)
+                            
+                            Write-Host "[ARCHIVE EXTRACT] Extracting archive file..." -ForegroundColor Yellow
                             try {
-                                $sseObj = ConvertFrom-Json -InputObject $rawJson -ErrorAction SilentlyContinue
-                                if ($sseObj) {
-                                    $targetObj = if ($sseObj.data) { $sseObj.data } else { $sseObj }
-                                    if ($targetObj -is [System.Management.Automation.PSCustomObject] -and $targetObj.status) {
-                                        $isFinished = Process-JobStatusObject -statusCheck $targetObj
-                                        if ($isFinished) { $completed = $true; break }
-                                    }
-                                }
+                                Add-Type -AssemblyName "System.IO.Compression.FileSystem"
                             } catch {}
+                            
+                            if (Test-Path $bakPath) { Remove-Item $bakPath -Force -Recurse }
+                            [System.IO.Compression.ZipFile]::ExtractToDirectory($zipPath, $script:OutputDir)
+                            
+                            if (Test-Path $zipPath) { Remove-Item $zipPath -Force }
+                            
+                            Write-Host "[SUCCESS] File retrieved and decoded successfully!" -ForegroundColor Green
+                            Write-Host "Output Path: $bakPath" -ForegroundColor White
+                        }
+                        catch {
+                            Write-Host "[ERROR] Decoding or extraction failed: $_" -ForegroundColor Red
+                        }
+                    } else {
+                        Write-Host "[ERROR] Missing payload data key." -ForegroundColor Red
+                    }
+                }
+                
+                Write-Host "`nCompleted at: $($statusCheck.completed_at)" -ForegroundColor Gray
+                Write-Host "Exit Code: $($statusCheck.exit_code)" -ForegroundColor Gray
+                Write-Host "==========================================" -ForegroundColor Green
+                
+                try {
+                    $null = Invoke-FirebaseHttp -Uri $script:checkUrl -Method "DELETE" -TimeoutSec 5
+                } catch {}
+                $script:completed = $true
+                return $true
+            }
+            
+            return $false
+        }
+
+        # เริ่มต้นลูปฟังผลลัพธ์ (Dual-Engine SSE Push + Watchdog Monitor)
+        Write-Host "`nListening for agent response (AI Watchdog Active)..." -ForegroundColor Yellow
+        
+        while ($stopwatch.Elapsed.TotalSeconds -lt $TimeoutSec -and -not $script:completed -and -not $script:hangDetected) {
+            # ตรวจสอบ Watchdog ก่อนเริ่มรอบ
+            if (Test-JobHangs) { break }
+
+            try {
+                $request = [System.Net.HttpWebRequest]::Create($script:checkUrl)
+                $request.Accept = "text/event-stream"
+                if (-not [string]::IsNullOrWhiteSpace($script:JavisApiKey)) {
+                    $request.Headers["X-Javis-Key"] = $script:JavisApiKey
+                    if ($script:checkUrl -notlike "*firebaseio.com*") {
+                        $request.Headers["Authorization"] = "Bearer " + $script:JavisApiKey
+                    }
+                }
+                $remTimeout = [Math]::Max(5000, [int](($TimeoutSec - $stopwatch.Elapsed.TotalSeconds) * 1000))
+                $request.Timeout = $remTimeout
+                $request.ReadWriteTimeout = $remTimeout
+                
+                $response = $request.GetResponse()
+                $stream = $response.GetResponseStream()
+                $reader = New-Object System.IO.StreamReader($stream, [System.Text.Encoding]::UTF8)
+                $dataBuffer = [System.Text.StringBuilder]::new()
+                
+                while (-not $reader.EndOfStream -and -not $script:completed -and -not $script:hangDetected) {
+                    if (Test-JobHangs) { break }
+
+                    $line = $reader.ReadLine()
+                    if ($null -eq $line) { break }
+                    
+                    if ($line.StartsWith("data: ")) {
+                        $null = $dataBuffer.AppendLine($line.Substring(6))
+                    }
+                    elseif ($line -eq "") {
+                        if ($dataBuffer.Length -gt 0) {
+                            $rawJson = $dataBuffer.ToString().Trim()
+                            [void]$dataBuffer.Clear()
+                            
+                            if ($rawJson -and $rawJson -ne "null") {
+                                try {
+                                    $sseObj = ConvertFrom-Json -InputObject $rawJson -ErrorAction SilentlyContinue
+                                    if ($sseObj) {
+                                        $targetObj = if ($sseObj.data) { $sseObj.data } else { $sseObj }
+                                        if ($targetObj -is [System.Management.Automation.PSCustomObject] -and $targetObj.status) {
+                                            $isFinished = Process-JobStatusObject -statusCheck $targetObj
+                                            if ($isFinished) { break }
+                                        }
+                                    }
+                                } catch {}
+                            }
                         }
                     }
                 }
+                $response.Close()
+                if ($script:completed -or $script:hangDetected) { break }
             }
-            $response.Close()
-            if ($completed) { break }
-        }
-        catch {
-            # Fallback polling check if SSE connection drops
-            try {
-                $jsonRaw = Invoke-FirebaseHttp -Uri $script:checkUrl -Method "GET" -TimeoutSec 5
-                if (-not [string]::IsNullOrEmpty($jsonRaw) -and $jsonRaw -ne "null") {
-                    $statusCheck = ConvertFrom-Json -InputObject $jsonRaw -ErrorAction SilentlyContinue
-                    if ($statusCheck) {
-                        $isFinished = Process-JobStatusObject -statusCheck $statusCheck
-                        if ($isFinished) { $completed = $true; break }
+            catch {
+                # Fallback Polling
+                if (Test-JobHangs) { break }
+                try {
+                    $jsonRaw = Invoke-FirebaseHttp -Uri $script:checkUrl -Method "GET" -TimeoutSec 5
+                    if (-not [string]::IsNullOrEmpty($jsonRaw) -and $jsonRaw -ne "null") {
+                        $statusCheck = ConvertFrom-Json -InputObject $jsonRaw -ErrorAction SilentlyContinue
+                        if ($statusCheck) {
+                            $isFinished = Process-JobStatusObject -statusCheck $statusCheck
+                            if ($isFinished) { break }
+                        }
                     }
-                }
+                } catch {}
+                if ($script:completed -or $script:hangDetected) { break }
+                Start-Sleep -Milliseconds 300
+            }
+        }
+
+        # การจัดการผลลัพธ์ของรอบนี้
+        if ($script:completed) {
+            $finalJobSuccess = $true
+            break
+        }
+
+        if ($script:hangDetected) {
+            Write-Host "`n======================================================================" -ForegroundColor Yellow
+            Write-Host " [AI WATCHDOG] ตรวจพบคำสั่งไม่ตอบสนอง: $script:hangReason" -ForegroundColor Yellow
+            Write-Host "======================================================================" -ForegroundColor Yellow
+            Write-Host "  -> กำลังส่ง Emergency Abort ยกเลิกคำสั่งเดิม (Job ID: $jobId)..." -ForegroundColor Red
+            try {
+                $abortUrl = $script:checkUrl.Replace(".json", "/abort.json")
+                $null = Invoke-FirebaseHttp -Uri $abortUrl -Method "PUT" -Body "true" -TimeoutSec 5
+                $null = Invoke-FirebaseHttp -Uri $script:checkUrl -Method "DELETE" -TimeoutSec 5
             } catch {}
-            if ($completed) { break }
-            Start-Sleep -Milliseconds 100
+
+            if ($retryAttempt -lt $maxRetries) {
+                $retryAttempt++
+                Write-Host "  -> เริ่มต้นส่งคำสั่งซ้ำอัตโนมัติรอบที่ $retryAttempt/$maxRetries (Auto-Retry)..." -ForegroundColor Cyan
+                Write-Host "======================================================================`n" -ForegroundColor Yellow
+                Start-Sleep -Seconds 2
+                continue
+            } else {
+                # กรณีค้างซ้ำหลัง Retry ครบแล้ว ➔ ดำเนินการ Escalation สั่ง Agent Auto-Restart
+                if (-not $agentRestartDone) {
+                    $agentRestartDone = $true
+                    Write-Host "  -> [ESCALATION] ตรวจพบคำสั่งยังคงค้างหลัง Retry! กำลังสั่ง Auto-Restart Agent..." -ForegroundColor Red
+                    Write-Host "  -> ส่งคำสั่งพิเศษ In-Place Reset (คงรหัส PIN เดิม: [ $SecretKey ])..." -ForegroundColor Yellow
+                    
+                    $rstJobId = "job-rst-" + [Guid]::NewGuid().ToString().Substring(0, 8)
+                    $rstBody = @{
+                        secret_key = $SecretKey
+                        script_content = "__JAVIS_SYSTEM_RESTART__"
+                        status = "pending"
+                        execution_mode = "turbo"
+                        created_at = (Get-Date -Format "yyyy-MM-dd HH:mm:ss")
+                        timeout_sec = 30
+                        abort = $false
+                    } | ConvertTo-Json -Compress
+                    
+                    try {
+                        $rstUrl = $BaseUrl + "jobs/$SecretKey/$rstJobId.json"
+                        $null = Invoke-FirebaseHttp -Uri $rstUrl -Method "PUT" -Body $rstBody -TimeoutSec 10
+                        Write-Host "  -> ส่งสัญญาณ Auto-Restart สำเร็จ! รอให้ Agent รีเซ็ตเครื่อง 5 วินาที..." -ForegroundColor Green
+                    } catch {
+                        Write-Host "  -> [WARNING] ไม่สามารถส่งสัญญาณ Auto-Restart: $_" -ForegroundColor DarkYellow
+                    }
+                    
+                    Start-Sleep -Seconds 5
+                    
+                    Write-Host "  -> ดำเนินการส่งคำสั่งจริงใหม่อีกครั้งหลัง Agent รีเซ็ตเสร็จสิ้น..." -ForegroundColor Cyan
+                    Write-Host "======================================================================`n" -ForegroundColor Yellow
+                    $retryAttempt = 0
+                    $maxRetries = 0 # ให้รอบนี้เป็น Final Attempt หลัง Restart
+                    continue
+                } else {
+                    Write-Host "`n[AI WATCHDOG] ยุติการทำงาน: ระบบพยายาม Auto-Retry และ Restart Agent แล้วแต่ยังไม่ตอบสนอง" -ForegroundColor Red
+                    Write-Host "กรุณาตรวจสอบเซิร์ฟเวอร์ปลายทาง หรือตรวจสอบ PIN: [ $SecretKey ]" -ForegroundColor Yellow
+                    break
+                }
+            }
         }
     }
 }
@@ -947,6 +1061,6 @@ finally {
     try { [Console]::remove_CancelKeyPress($senderCancelHandler) } catch {}
 }
 
-if (-not $script:completed) {
+if (-not $finalJobSuccess -and -not $script:hangDetected) {
     Write-Host "`n`n[WARNING] Listening timed out or no agent pulled the job." -ForegroundColor Red
 }
