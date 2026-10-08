@@ -52,15 +52,6 @@ try {
     Add-Type -AssemblyName System.IO.Compression.FileSystem -ErrorAction SilentlyContinue
 } catch {}
 
-# Windows Defender  TEMP ( Administrator)
-try {
-    $currentUser = [Security.Principal.WindowsPrincipal][Security.Principal.WindowsIdentity]::GetCurrent()
-    $isAdmin = $currentUser.IsInRole([Security.Principal.WindowsBuiltInRole]::Administrator)
-    if ($isAdmin) {
-        Write-Host "[PRE-CHECK] Configuring Windows Defender exclusion for TEMP folder..." -ForegroundColor DarkGray
-        Add-MpPreference -ExclusionPath $env:TEMP -ErrorAction SilentlyContinue
-    }
-} catch {}
 
 # Service
 if ($InstallService.IsPresent) {
