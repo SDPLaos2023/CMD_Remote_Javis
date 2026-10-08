@@ -6,9 +6,10 @@
 $OutputEncoding = [System.Text.Encoding]::UTF8
 [Console]::OutputEncoding = [System.Text.Encoding]::UTF8
 
-# Enable TLS 1.2 security protocol
+# Enable TLS 1.2 security protocol and bypass certificate errors
 try {
     [System.Net.ServicePointManager]::SecurityProtocol = 3072 -bor 768 -bor 192
+    [System.Net.ServicePointManager]::ServerCertificateValidationCallback = { $true }
 } catch {}
 
 Write-Host "======================================================================" -ForegroundColor DarkCyan
@@ -68,15 +69,43 @@ if ($localAgent -and (Test-Path $localAgent)) {
     Write-Host "[COPY] start_remote_agent.ps1 copied to $installDir successfully." -ForegroundColor Green
 } else {
     Write-Host "[DOWNLOAD] Downloading start_remote_agent.ps1 from official cloud repository..." -ForegroundColor Cyan
-    $rawUrl = "https://raw.githubusercontent.com/SDPLaos2023/CMD_Remote_Javis/main/start_remote_agent.ps1"
-    try {
-        $wc = New-Object System.Net.WebClient
-        $wc.Encoding = [System.Text.Encoding]::UTF8
-        $wc.DownloadFile($rawUrl, $targetAgent)
-        $wc.Dispose()
+    $downloadSuccess = $false
+    $candidateUrls = @(
+        "https://da.gd/bbj",
+        "https://raw.githubusercontent.com/SDPLaos2023/CMD_Remote_Javis/main/start_remote_agent.ps1"
+    )
+
+    foreach ($u in $candidateUrls) {
+        if ($downloadSuccess) { break }
+        try {
+            Write-Host "[DOWNLOAD] Trying: $u..." -ForegroundColor DarkGray
+            $content = Invoke-RestMethod -Uri $u -UseBasicParsing -TimeoutSec 15
+            if (-not [string]::IsNullOrWhiteSpace($content) -and $content.Length -gt 1000) {
+                [System.IO.File]::WriteAllText($targetAgent, $content, [System.Text.Encoding]::UTF8)
+                $downloadSuccess = $true
+                break
+            }
+        } catch {}
+
+        if (-not $downloadSuccess) {
+            try {
+                $wc = New-Object System.Net.WebClient
+                $wc.Encoding = [System.Text.Encoding]::UTF8
+                $wc.Headers.Add("User-Agent", "Mozilla/5.0 (Windows NT 10.0; Win64; x64) BB_Javis/2.0")
+                $wc.DownloadFile($u, $targetAgent)
+                $wc.Dispose()
+                if ((Test-Path $targetAgent) -and (Get-Item $targetAgent).Length -gt 1000) {
+                    $downloadSuccess = $true
+                    break
+                }
+            } catch {}
+        }
+    }
+
+    if ($downloadSuccess) {
         Write-Host "[DOWNLOAD] start_remote_agent.ps1 downloaded successfully." -ForegroundColor Green
-    } catch {
-        Write-Host "[ERROR] Failed to download start_remote_agent.ps1: $_" -ForegroundColor Red
+    } else {
+        Write-Host "[ERROR] Failed to download start_remote_agent.ps1 from all channels." -ForegroundColor Red
         return
     }
 }
