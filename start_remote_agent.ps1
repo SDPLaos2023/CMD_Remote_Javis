@@ -11,9 +11,11 @@ param (
     [int]$PollIntervalSec = 3
 )
 
-# Console  UTF-8
-$OutputEncoding = [System.Text.Encoding]::UTF8
-[Console]::OutputEncoding = [System.Text.Encoding]::UTF8
+# Console UTF-8 (Safe for both Interactive Console and Windows Service Session 0)
+try {
+    $OutputEncoding = [System.Text.Encoding]::UTF8
+    [Console]::OutputEncoding = [System.Text.Encoding]::UTF8
+} catch {}
 
 # Token  Firebase RTDB
 if ([string]::IsNullOrWhiteSpace($FirebaseAuthToken)) {

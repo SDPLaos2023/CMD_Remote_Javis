@@ -122,8 +122,7 @@ namespace BBJavisService
 
                 ProcessStartInfo psi = new ProcessStartInfo();
                 psi.FileName = "powershell.exe";
-                string escapedScript = scriptPath.Replace("\"", "\\\"");
-                psi.Arguments = "-NoProfile -ExecutionPolicy Bypass -Command \"[Console]::OutputEncoding=[System.Text.Encoding]::UTF8; & '" + escapedScript.Replace("'", "''") + "' -Mode fix -AsService\"";
+                psi.Arguments = "-NoProfile -ExecutionPolicy Bypass -File \"" + scriptPath + "\" -Mode fix -AsService";
                 psi.WorkingDirectory = baseDir;
                 psi.UseShellExecute = false;
                 psi.CreateNoWindow = true;
