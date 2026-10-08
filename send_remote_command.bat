@@ -219,8 +219,11 @@ function Get-RegisteredDevices {
                                 $dt = [DateTime]::Parse($lastHbStr).ToUniversalTime()
                                 $diff = $nowUtc - $dt
                                 $ageSec = [int]$diff.TotalSeconds
+                                if ($ageSec -lt 0) { $ageSec = 0 }
                                 $hasValidHb = $true
-                                if ($ageSec -lt 60) {
+                                if ($ageSec -le 5) {
+                                    $lastSeenText = "Just now"
+                                } elseif ($ageSec -lt 60) {
                                     $lastSeenText = "${ageSec}s ago"
                                 } elseif ($ageSec -lt 3600) {
                                     $lastSeenText = "$([int]($ageSec/60))m ago"
@@ -241,7 +244,8 @@ function Get-RegisteredDevices {
                             continue
                         }
 
-                        $isOnline = ($d.status -eq "online" -and $ageSec -le 75)
+                        # Online status: active heartbeat within 180s (tolerates enterprise VM clock skew up to 3 mins)
+                        $isOnline = ($d.status -eq "online" -and $ageSec -le 180)
                         $statusText = $(if ($isOnline) { "ONLINE" } else { "OFFLINE" })
                         $typeText = $(if ($isSvc) { "Service" } else { "Temp" })
 
