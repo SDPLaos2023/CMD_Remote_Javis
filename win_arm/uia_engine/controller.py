@@ -1,5 +1,5 @@
 """
-controller.py - สั่งการควบคุม UI Elements (Click, SetText, Hotkey)
+controller.py - Control UI Elements (Click, SetText, Hotkey)
 """
 
 from typing import Dict, Any, Optional
@@ -34,11 +34,11 @@ def _click_impl(target_title: Optional[str] = None, handle: Optional[int] = None
                 control_type: Optional[str] = None, simulate_move: bool = False) -> Dict[str, Any]:
     win = _find_window_impl(target_title=target_title, handle=handle)
     if not win:
-        return {"success": False, "error": f"ไม่พบหน้าต่าง '{target_title or handle}'"}
+        return {"success": False, "error": f"Target window not found '{target_title or handle}'"}
 
     ctrl = _find_control(win, name=name, auto_id=auto_id, control_type=control_type)
     if not ctrl:
-        return {"success": False, "error": f"ไม่พบ Control ที่ตรงกับ Name='{name}', AutoId='{auto_id}'"}
+        return {"success": False, "error": f"Control matching Name='{name}', AutoId='{auto_id}' not found"}
 
     ctrl_name = ctrl.window_text() or auto_id or "Element"
     try:
@@ -52,7 +52,7 @@ def _click_impl(target_title: Optional[str] = None, handle: Optional[int] = None
         ctrl.click_input()
         return {"success": True, "action": "click", "name": ctrl_name, "mode": "simulated"}
     except Exception as e:
-        return {"success": False, "error": f"คลิกล้มเหลว: {str(e)}"}
+        return {"success": False, "error": f"Click failed: {str(e)}"}
 
 
 def click_element(target_title: Optional[str] = None, handle: Optional[int] = None,
@@ -66,22 +66,22 @@ def _set_text_impl(target_title: Optional[str] = None, handle: Optional[int] = N
                    value: str = "", name: Optional[str] = None, auto_id: Optional[str] = None) -> Dict[str, Any]:
     win = _find_window_impl(target_title=target_title, handle=handle)
     if not win:
-        return {"success": False, "error": f"ไม่พบหน้าต่าง '{target_title or handle}'"}
+        return {"success": False, "error": f"Target window not found '{target_title or handle}'"}
 
     ctrl = None
     if name or auto_id:
         ctrl = _find_control(win, name=name, auto_id=auto_id, control_type="Edit")
         
-    # หากไม่พบ หรือไม่ได้ระบุชื่อ ให้เลือก Edit control ตัวแรก
+    # If not found, fallback to first Edit control
     if not ctrl:
         ctrl = _find_control(win, control_type="Edit")
         
-    # หากยังไม่พบ ลอง Document control
+    # Fallback to Document control
     if not ctrl:
         ctrl = _find_control(win, control_type="Document")
 
     if not ctrl:
-        return {"success": False, "error": f"ไม่พบช่องกรอกข้อความ (Edit) ในหน้าต่าง '{win.window_text()}'"}
+        return {"success": False, "error": f"No Edit control found in window '{win.window_text()}'"}
 
     ctrl_name = ctrl.window_text() or auto_id or "TextBox"
     try:
@@ -96,7 +96,7 @@ def _set_text_impl(target_title: Optional[str] = None, handle: Optional[int] = N
         ctrl.type_keys(value, with_spaces=True)
         return {"success": True, "name": ctrl_name, "value_length": len(value), "method": "type_keys"}
     except Exception as e:
-        return {"success": False, "error": f"กรอกข้อความล้มเหลว: {str(e)}"}
+        return {"success": False, "error": f"SetText failed: {str(e)}"}
 
 
 def set_element_text(target_title: Optional[str] = None, handle: Optional[int] = None,
@@ -108,14 +108,14 @@ def set_element_text(target_title: Optional[str] = None, handle: Optional[int] =
 def _hotkey_impl(target_title: Optional[str] = None, handle: Optional[int] = None, keys: str = "") -> Dict[str, Any]:
     win = _find_window_impl(target_title=target_title, handle=handle)
     if not win:
-        return {"success": False, "error": f"ไม่พบหน้าต่าง '{target_title or handle}'"}
+        return {"success": False, "error": f"Target window not found '{target_title or handle}'"}
 
     try:
         win.set_focus()
         win.type_keys(keys)
         return {"success": True, "keys": keys, "target_window": win.window_text()}
     except Exception as e:
-        return {"success": False, "error": f"ส่งคีย์ลัดล้มเหลว: {str(e)}"}
+        return {"success": False, "error": f"Hotkey failed: {str(e)}"}
 
 
 def send_hotkey(target_title: Optional[str] = None, handle: Optional[int] = None, keys: str = "") -> Dict[str, Any]:

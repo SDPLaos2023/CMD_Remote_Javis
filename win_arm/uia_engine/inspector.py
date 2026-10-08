@@ -1,5 +1,5 @@
 """
-inspector.py - สแกน UI Controls ในหน้าต่างและจัดโครงสร้างเป็น Compact JSON
+inspector.py - Scan UI controls in target window and structure as compact JSON
 """
 
 from typing import List, Dict, Any, Optional
@@ -17,7 +17,7 @@ def _inspect_impl(target_title: Optional[str] = None, handle: Optional[int] = No
     from .window_mgr import _find_window_impl
     win = _find_window_impl(target_title=target_title, handle=handle)
     if not win:
-        return {"success": False, "error": f"ไม่พบหน้าต่าง '{target_title or handle}'"}
+        return {"success": False, "error": f"Target window not found '{target_title or handle}'"}
 
     controls = []
     try:
@@ -30,7 +30,7 @@ def _inspect_impl(target_title: Optional[str] = None, handle: Optional[int] = No
                 auto_id = elem.automation_id or ""
                 rect = c.rectangle()
 
-                # กรองเฉพาะ Element ที่มีขนาดและมีชื่อ/ID หรือเป็น Interactive Type
+                # Filter elements with positive dimensions and name/ID or interactive type
                 if (ctype in INTERACTIVE_TYPES or name or auto_id) and rect.width() > 0 and rect.height() > 0:
                     item = {
                         "type": ctype,
@@ -46,10 +46,10 @@ def _inspect_impl(target_title: Optional[str] = None, handle: Optional[int] = No
             "success": True,
             "target_window": win.window_text(),
             "count": len(controls),
-            "controls": controls[:150] # จำกัดไม่เกิน 150 elements เพื่อประหยัด token
+            "controls": controls[:150] # Limit to 150 elements to conserve tokens
         }
     except Exception as e:
-        return {"success": False, "error": f"เกิดข้อผิดพลาดในการสแกน Controls: {str(e)}"}
+        return {"success": False, "error": f"Error scanning controls: {str(e)}"}
 
 
 def inspect_controls(target_title: Optional[str] = None, handle: Optional[int] = None, max_depth: int = 4) -> Dict[str, Any]:

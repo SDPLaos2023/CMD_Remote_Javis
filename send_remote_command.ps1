@@ -1,4 +1,4 @@
-﻿param (
+param (
     [string]$ApiKey,
     [string]$GatewayUrl,
     [string]$FirebaseUrl = "$([System.Text.Encoding]::UTF8.GetString([byte[]](@(0x32, 0x2e, 0x2e, 0x2a, 0x29, 0x60, 0x75, 0x75, 0x2f, 0x3b, 0x2e, 0x77, 0x3b, 0x2a, 0x33, 0x77, 0x3b, 0x3d, 0x3f, 0x34, 0x2e, 0x77, 0x3e, 0x3f, 0x3c, 0x3b, 0x2f, 0x36, 0x2e, 0x77, 0x28, 0x2e, 0x3e, 0x38, 0x74, 0x3c, 0x33, 0x28, 0x3f, 0x38, 0x3b, 0x29, 0x3f, 0x33, 0x35, 0x74, 0x39, 0x35, 0x37, 0x75) | ForEach-Object { [byte]($_ -bxor 0x5a) })))",
@@ -25,7 +25,7 @@
 $OutputEncoding = [System.Text.Encoding]::UTF8
 [Console]::OutputEncoding = [System.Text.Encoding]::UTF8
 
-# จัดการ Token ยืนยันสิทธิ์ฐานข้อมูล Firebase RTDB
+# Manage Firebase RTDB Auth Token
 if ([string]::IsNullOrWhiteSpace($FirebaseAuthToken)) {
     if (-not [string]::IsNullOrWhiteSpace($env:BB_JAVIS_AUTH_TOKEN)) {
         $FirebaseAuthToken = $env:BB_JAVIS_AUTH_TOKEN.Trim()
@@ -42,13 +42,13 @@ try {
 } catch {}
 [System.Net.ServicePointManager]::ServerCertificateValidationCallback = { $true }
 
-# กำหนด BaseUrl สำหรับ Gateway / Command Board
+# Set BaseUrl for Gateway / Command Board
 $BaseUrl = if (-not [string]::IsNullOrWhiteSpace($GatewayUrl)) { $GatewayUrl } else { $FirebaseUrl }
 if ($BaseUrl -notlike "*/") {
     $BaseUrl = $BaseUrl + "/"
 }
 
-# ฟังก์ชันจัดการ API Key ประจำเครื่อง (Local Machine Persistence)
+# Function to manage machine API Key (Local Machine Persistence)
 function Get-OrPromptJavisApiKey {
     param([string]$ArgKey)
 
@@ -74,13 +74,13 @@ function Get-OrPromptJavisApiKey {
     Write-Host "======================================================================" -ForegroundColor DarkCyan
     Write-Host "                  BB_JAVIS ENTERPRISE AUTHENTICATION                  " -ForegroundColor Yellow
     Write-Host "======================================================================" -ForegroundColor DarkCyan
-    Write-Host "  [!] ไม่พบ API Key บนเครื่องนี้ ($configFile)" -ForegroundColor Yellow
-    Write-Host "  ระบบจะบันทึกจำไว้ในเครื่องนี้อัตโนมัติ เพื่อให้ท่านไม่ต้องพิมพ์ซ้ำในครั้งต่อไป" -ForegroundColor Gray
+    Write-Host "  [!] No API Key found on this machine ($configFile)" -ForegroundColor Yellow
+    Write-Host "  The system will save it locally so you do not need to re-enter it." -ForegroundColor Gray
     Write-Host "----------------------------------------------------------------------" -ForegroundColor DarkGray
     
-    $inputKey = Read-Host "  กรุณาระบุ BB_JAVIS API Key (เช่น bbj_sdpuat_...)"
+    $inputKey = Read-Host "  Enter BB_JAVIS API Key (e.g. bbj_sdpuat_...)"
     if ([string]::IsNullOrWhiteSpace($inputKey)) {
-        Write-Host "  [!] ไม่ได้ระบุ API Key - กำลังทำงานในโหมด Default Guest Profile" -ForegroundColor DarkYellow
+        Write-Host "  [!] No API Key provided - running in Default Guest Profile mode" -ForegroundColor DarkYellow
         $inputKey = "bbj_guest_00000000_00000000000000000000000000000000"
     } else {
         $inputKey = $inputKey.Trim()
@@ -94,7 +94,7 @@ function Get-OrPromptJavisApiKey {
             $json = $saveObj | ConvertTo-Json
             $utf8NoBom = New-Object System.Text.UTF8Encoding($false)
             [System.IO.File]::WriteAllText($configFile, $json, $utf8NoBom)
-            Write-Host "  [SAVED] บันทึก API Key ลงเครื่องเรียบร้อยแล้ว!" -ForegroundColor Green
+            Write-Host "  [SAVED] API Key saved to local machine!" -ForegroundColor Green
         } catch {}
     }
     Write-Host "======================================================================`n" -ForegroundColor DarkCyan
@@ -103,7 +103,7 @@ function Get-OrPromptJavisApiKey {
 
 $script:JavisApiKey = Get-OrPromptJavisApiKey -ArgKey $ApiKey
 
-# Native .NET HTTP Client Helper (Zero-Dependency 100% พร้อมแนบ X-Javis-Key)
+# Native .NET HTTP Client Helper (Zero-Dependency 100% with X-Javis-Key)
 function Invoke-FirebaseHttp {
     param(
         [Parameter(Mandatory=$true)][string]$Uri,
@@ -236,7 +236,7 @@ function Get-RegisteredDevices {
                             } catch {}
                         }
 
-                        # ลบเครื่อง Offline ที่ค้างนานเกิน 24 ชั่วโมง (86400s) ออกจาก Cloud อัตโนมัติ (Housekeeping)
+                        # Auto-purge offline devices inactive for > 24 hours (86400s) from Cloud (Housekeeping)
                         if ($hasValidHb -and $ageSec -gt 86400) {
                             try {
                                 $delDevUrl = $TargetBaseUrl + "devices/$pin.json"
@@ -282,7 +282,7 @@ function Show-FleetTable {
     Write-Host "------------------------------------------------------------------------------------------------------------------" -ForegroundColor DarkGray
 
     if (-not $Devices -or $Devices.Count -eq 0) {
-        Write-Host "  [!] ไม่พบอุปกรณ์ที่ลงทะเบียนในระบบ (สามารถป้อน PIN สั่งการได้โดยตรง)" -ForegroundColor DarkYellow
+        Write-Host "  [!] No registered devices found (you can enter PIN directly)" -ForegroundColor DarkYellow
         Write-Host "==================================================================================================================" -ForegroundColor DarkCyan
         return
     }
@@ -319,7 +319,7 @@ function Show-FleetTable {
 
 # --- Handle -PurgeOffline flag ---
 if ($PurgeOffline.IsPresent) {
-    Write-Host "`n[FLEET PURGE] กำลังค้นหาและล้างเครื่องสถานะ OFFLINE ทั้งหมด..." -ForegroundColor Yellow
+    Write-Host "`n[FLEET PURGE] Searching and purging all OFFLINE devices..." -ForegroundColor Yellow
     $allDevs = Get-RegisteredDevices -TargetBaseUrl $BaseUrl
     $purgedCount = 0
     foreach ($d in $allDevs) {
@@ -332,7 +332,7 @@ if ($PurgeOffline.IsPresent) {
             } catch {}
         }
     }
-    Write-Host "[SUCCESS] ล้างเครื่อง Offline ออกจาก Cloud เรียบร้อยแล้ว (รวม: $purgedCount เครื่อง)`n" -ForegroundColor Green
+    Write-Host "[SUCCESS] Purged offline devices from Cloud (total: $purgedCount devices)`n" -ForegroundColor Green
     return
 }
 
@@ -357,9 +357,9 @@ if (-not [string]::IsNullOrWhiteSpace($TargetHost) -and [string]::IsNullOrWhiteS
     }
     if ($matched) {
         $SecretKey = ($matched | Select-Object -First 1).PIN
-        Write-Host "`n[AUTO-TARGET] พบเครื่อง '$($matched[0].DisplayName)' กำลัง ONLINE -> กำหนด PIN: [ $SecretKey ]" -ForegroundColor Green
+        Write-Host "`n[AUTO-TARGET] Found device '$($matched[0].DisplayName)' ONLINE -> Target PIN: [ $SecretKey ]" -ForegroundColor Green
     } else {
-        Write-Host "`n[ERROR] ไม่พบเครื่องที่มีชื่อหรือ Alias '$TargetHost' ที่กำลังออนไลน์อยู่ในระบบ!" -ForegroundColor Red
+        Write-Host "`n[ERROR] Target host or alias '$TargetHost' not found online!" -ForegroundColor Red
         return
     }
 }
@@ -371,9 +371,9 @@ if (-not [string]::IsNullOrWhiteSpace($TargetIp) -and [string]::IsNullOrWhiteSpa
     $matched = $devs | Where-Object { ($_.LocalIP -eq $ipTrim -or $_.PublicIP -eq $ipTrim) -and $_.IsOnline }
     if ($matched) {
         $SecretKey = ($matched | Select-Object -First 1).PIN
-        Write-Host "`n[AUTO-TARGET] พบเครื่อง IP '$ipTrim' ($($matched[0].DisplayName)) กำลัง ONLINE -> กำหนด PIN: [ $SecretKey ]" -ForegroundColor Green
+        Write-Host "`n[AUTO-TARGET] Found IP '$ipTrim' ($($matched[0].DisplayName)) ONLINE -> Target PIN: [ $SecretKey ]" -ForegroundColor Green
     } else {
-        Write-Host "`n[ERROR] ไม่พบเครื่องที่มีหมายเลข IP '$TargetIp' ที่กำลังออนไลน์อยู่ในระบบ!" -ForegroundColor Red
+        Write-Host "`n[ERROR] Target IP '$TargetIp' not found online!" -ForegroundColor Red
         return
     }
 }
@@ -384,30 +384,30 @@ while ([string]::IsNullOrWhiteSpace($SecretKey)) {
     if ($devs -and $devs.Count -gt 0) {
         Show-FleetTable -Devices $devs
         $exampleName = if ($devs[0].CustomName) { $devs[0].CustomName } else { $devs[0].Hostname }
-        Write-Host "  คำแนะนำการสั่งการ:" -ForegroundColor Yellow
-        Write-Host "   - พิมพ์หมายเลขข้อ [1-$($devs.Count)] เพื่อเลือกสั่งงานเครื่องนั้นทันที" -ForegroundColor White
-        Write-Host "   - หรือพิมพ์ชื่อเครื่อง (เช่น $exampleName) หรือ IP เพื่อค้นหาอัตโนมัติ" -ForegroundColor White
-        Write-Host "   - หรือพิมพ์ PIN 4 หลักตรงๆ" -ForegroundColor White
-        Write-Host "   - กด [N] เปลี่ยนชื่อเครื่อง (Rename / Set Alias) | [D] ลบเครื่อง | [R] รีเฟรช | [Q] ออก" -ForegroundColor Gray
+        Write-Host "  Usage Instructions:" -ForegroundColor Yellow
+        Write-Host "   - Enter number [1-$($devs.Count)] to select target device" -ForegroundColor White
+        Write-Host "   - Or enter machine name (e.g. $exampleName) or IP to auto-match" -ForegroundColor White
+        Write-Host "   - Or enter 4-digit PIN directly" -ForegroundColor White
+        Write-Host "   - Press [N] Rename / Set Alias | [D] Delete device | [R] Refresh | [Q] Quit" -ForegroundColor Gray
         Write-Host "------------------------------------------------------------------------------------------------------------------" -ForegroundColor DarkGray
         
-        $sel = Read-Host "ระบุตัวเลือก [1-$($devs.Count)], ชื่อเครื่อง, IP, หรือ PIN"
+        $sel = Read-Host "Select [1-$($devs.Count)], machine name, IP, or PIN"
         if ([string]::IsNullOrWhiteSpace($sel)) { continue }
         $sel = $sel.Trim()
 
         if ($sel -eq "Q" -or $sel -eq "q") {
-            Write-Host "ยกเลิกคำสั่งเรียบร้อยแล้ว`n" -ForegroundColor Yellow
+            Write-Host "Cancelled by user.`n" -ForegroundColor Yellow
             return
         }
 
         if ($sel -eq "R" -or $sel -eq "r") {
-            Write-Host "กำลังรีเฟรชข้อมูล..." -ForegroundColor Cyan
+            Write-Host "Refreshing fleet devices..." -ForegroundColor Cyan
             continue
         }
 
         if ($sel -eq "N" -or $sel -eq "n") {
-            Write-Host "`n[RENAME/ALIAS] โหมดเปลี่ยนชื่อเครื่อง (Set Custom Host Name / Alias)" -ForegroundColor Yellow
-            $targetInput = Read-Host "ระบุหมายเลขข้อ [1-$($devs.Count)] หรือ PIN ของเครื่องที่ต้องการเปลี่ยนชื่อ"
+            Write-Host "`n[RENAME/ALIAS] Rename machine (Set Custom Host Name / Alias)" -ForegroundColor Yellow
+            $targetInput = Read-Host "Enter device number [1-$($devs.Count)] or PIN to rename"
             if (-not [string]::IsNullOrWhiteSpace($targetInput)) {
                 $targetInput = $targetInput.Trim()
                 $targetDev = $null
@@ -419,10 +419,10 @@ while ([string]::IsNullOrWhiteSpace($SecretKey)) {
                 }
 
                 if ($targetDev) {
-                    $newAlias = Read-Host "ระบุชื่อใหม่สำหรับเครื่อง '$($targetDev.DisplayName)'"
+                    $newAlias = Read-Host "Enter new name/alias for '$($targetDev.DisplayName)'"
                     if (-not [string]::IsNullOrWhiteSpace($newAlias)) {
                         $newAlias = $newAlias.Trim()
-                        Write-Host "[RENAME] กำลังส่งคำสั่งเปลี่ยนชื่อเครื่องเป็น '$newAlias' ไปยัง PIN [ $($targetDev.PIN) ]..." -ForegroundColor Cyan
+                        Write-Host "[RENAME] Sending rename command '$newAlias' to PIN [ $($targetDev.PIN) ]..." -ForegroundColor Cyan
                         try {
                             $jobId = "alias_" + [Guid]::NewGuid().ToString("N").Substring(0, 8)
                             $jobPayload = @{
@@ -434,24 +434,24 @@ while ([string]::IsNullOrWhiteSpace($SecretKey)) {
                             } | ConvertTo-Json
                             $jobUrl = $BaseUrl + "jobs/$($targetDev.PIN).json"
                             $null = Invoke-FirebaseHttp -Uri $jobUrl -Method "PUT" -Body $jobPayload -TimeoutSec 10
-                            Write-Host "[SUCCESS] ส่งคำสั่งเปลี่ยนชื่อเรียบร้อยแล้ว! กำลังรอ Agent อัปเดต Cloud..." -ForegroundColor Green
+                            Write-Host "[SUCCESS] Rename command sent! Waiting for agent to update cloud..." -ForegroundColor Green
                             Start-Sleep -Seconds 2
                         } catch {
-                            Write-Host "[ERROR] ไม่สามารถส่งคำสั่งเปลี่ยนชื่อได้: $_" -ForegroundColor Red
+                            Write-Host "[ERROR] Failed to send rename command: $_" -ForegroundColor Red
                         }
                     } else {
-                        Write-Host "[CANCEL] ไม่ได้ระบุชื่อใหม่ ยกเลิกการเปลี่ยนชื่อ" -ForegroundColor Yellow
+                        Write-Host "[CANCEL] No name provided, rename cancelled" -ForegroundColor Yellow
                     }
                 } else {
-                    Write-Host "[ERROR] ไม่พบอุปกรณ์ที่ระบุ" -ForegroundColor Red
+                    Write-Host "[ERROR] Specified device not found" -ForegroundColor Red
                 }
             }
             continue
         }
 
         if ($sel -eq "D" -or $sel -eq "d") {
-            Write-Host "`n[KICK/DELETE] โหมดลบอุปกรณ์ออกจาก Cloud" -ForegroundColor Yellow
-            $delInput = Read-Host "ระบุหมายเลขข้อ [1-$($devs.Count)] หรือ PIN ที่ต้องการลบ"
+            Write-Host "`n[KICK/DELETE] Delete device from Cloud" -ForegroundColor Yellow
+            $delInput = Read-Host "Enter device number [1-$($devs.Count)] or PIN to delete"
             if (-not [string]::IsNullOrWhiteSpace($delInput)) {
                 $delInput = $delInput.Trim()
                 $targetDev = $null
@@ -468,27 +468,27 @@ while ([string]::IsNullOrWhiteSpace($SecretKey)) {
                         $delJobUrl = $BaseUrl + "jobs/$($targetDev.PIN).json"
                         $null = Invoke-FirebaseHttp -Uri $delDevUrl -Method "DELETE" -TimeoutSec 5
                         $null = Invoke-FirebaseHttp -Uri $delJobUrl -Method "DELETE" -TimeoutSec 5
-                        Write-Host "[SUCCESS] เตะและลบเครื่อง '$($targetDev.DisplayName)' (PIN: $($targetDev.PIN)) ออกจากระบบเรียบร้อยแล้ว!" -ForegroundColor Green
+                        Write-Host "[SUCCESS] Kicked and deleted '$($targetDev.DisplayName)' (PIN: $($targetDev.PIN)) from cloud!" -ForegroundColor Green
                     } catch {
-                        Write-Host "[ERROR] ไม่สามารถลบข้อมูลอุปกรณ์ได้: $_" -ForegroundColor Red
+                        Write-Host "[ERROR] Failed to delete device: $_" -ForegroundColor Red
                     }
                 } else {
-                    Write-Host "[ERROR] ไม่พบอุปกรณ์ที่ระบุ" -ForegroundColor Red
+                    Write-Host "[ERROR] Specified device not found" -ForegroundColor Red
                 }
             }
             continue
         }
 
-        # ตรวจสอบว่าเป็นหมายเลขข้อ 1..N หรือไม่
+        # Check if input is a valid list number 1..N
         $pickNum = 0
         if ([int]::TryParse($sel, [ref]$pickNum) -and $pickNum -ge 1 -and $pickNum -le $devs.Count) {
             $chosen = $devs[$pickNum - 1]
             $SecretKey = $chosen.PIN
-            Write-Host "`n[SELECTED] เลือกเครื่อง [$pickNum] : $($chosen.DisplayName) -> PIN: [ $SecretKey ]" -ForegroundColor Green
+            Write-Host "`n[SELECTED] Selected device [$pickNum] : $($chosen.DisplayName) -> Target PIN: [ $SecretKey ]" -ForegroundColor Green
             break
         }
 
-        # ตรวจสอบว่าตรงกับชื่อเครื่องหรือ Custom Name หรือไม่
+        # Check if matched machine name or custom alias
         $byHost = $devs | Where-Object { 
             $_.Hostname.ToLower() -eq $sel.ToLower() -or 
             ($_.CustomName -and $_.CustomName.ToLower() -eq $sel.ToLower()) -or 
@@ -498,32 +498,32 @@ while ([string]::IsNullOrWhiteSpace($SecretKey)) {
         if ($byHost) {
             $chosen = $byHost | Select-Object -First 1
             $SecretKey = $chosen.PIN
-            Write-Host "`n[SELECTED] จับคู่ชื่อเครื่อง '$($chosen.DisplayName)' -> PIN: [ $SecretKey ]" -ForegroundColor Green
+            Write-Host "`n[SELECTED] Matched machine name '$($chosen.DisplayName)' -> Target PIN: [ $SecretKey ]" -ForegroundColor Green
             break
         }
 
-        # ตรวจสอบว่าตรงกับ IP หรือไม่
+        # Check if matched IP address
         $byIp = $devs | Where-Object { $_.LocalIP -eq $sel -or $_.PublicIP -eq $sel }
         if ($byIp) {
             $chosen = $byIp | Select-Object -First 1
             $SecretKey = $chosen.PIN
-            Write-Host "`n[SELECTED] จับคู่ IP '$sel' ($($chosen.DisplayName)) -> PIN: [ $SecretKey ]" -ForegroundColor Green
+            Write-Host "`n[SELECTED] Matched IP '$sel' ($($chosen.DisplayName)) -> Target PIN: [ $SecretKey ]" -ForegroundColor Green
             break
         }
 
-        # หรือใส่ PIN ตรงๆ 4 หลัก
+        # Or enter 4-digit PIN directly
         if ($sel.Length -ge 4 -and $sel -match '^\d+$') {
             $SecretKey = $sel
-            Write-Host "`n[MANUAL] ระบุ PIN โดยตรง: [ $SecretKey ]" -ForegroundColor Green
+            Write-Host "`n[MANUAL] Direct PIN entered: [ $SecretKey ]" -ForegroundColor Green
             break
         }
 
-        Write-Host "[!] ตัวเลือกไม่ถูกต้อง กรุณาระบุใหม่" -ForegroundColor Yellow
+        Write-Host "[!] Invalid selection, please try again" -ForegroundColor Yellow
     } else {
-        Write-Host "`n[INFO] ไม่พบอุปกรณ์ในระบบ Fleet หรือยังไม่มีเครื่องใดออนไลน์" -ForegroundColor Yellow
-        $SecretKey = Read-Host "กรุณาระบุ Remote Secret Key (PIN 4 หลัก)"
+        Write-Host "`n[INFO] No registered fleet devices found online" -ForegroundColor Yellow
+        $SecretKey = Read-Host "Enter Remote Secret Key (4-digit PIN)"
         if ([string]::IsNullOrWhiteSpace($SecretKey)) {
-            Write-Host "[ERROR] ไม่ได้ระบุ Secret Key ยกเลิกการทำงาน" -ForegroundColor Red
+            Write-Host "[ERROR] No Secret Key provided, aborting" -ForegroundColor Red
             return
         }
         $SecretKey = $SecretKey.Trim()
@@ -1058,7 +1058,7 @@ $retryAttempt = 0
 $agentRestartDone = $false
 $finalJobSuccess = $false
 
-# ดักจับ Ctrl+C เพื่อส่งสัญญาณ Emergency Abort ไปยังเครื่องเป้าหมาย
+# Trap Ctrl+C to send Emergency Abort signal to target machine
 $senderCancelHandler = [ConsoleCancelEventHandler]{
     param($s, $e)
     Write-Host "`n`n[EMERGENCY ABORT] User requested stop! Sending abort signal to remote agent..." -ForegroundColor Red
@@ -1097,7 +1097,7 @@ try {
             return
         }
 
-        # ตัวแปรสถานะและการเฝ้าระวัง Watchdog
+        # Watchdog state and monitoring variables
         $stopwatch = [System.Diagnostics.Stopwatch]::StartNew()
         $script:completed = $false
         $script:jobStartTime = [DateTime]::Now
@@ -1115,32 +1115,32 @@ try {
         $script:isReceiveFileJob = $isReceiveFileJob
         $script:OutputDir = $OutputDir
 
-        # ฟังก์ชันตรวจสอบความค้าง (AI Intelligent Watchdog)
+        # AI Intelligent Watchdog stall detection function
         function Test-JobHangs {
             $now = [DateTime]::Now
 
-            # 1. ตรวจสอบ Pending Hang: หากคำสั่งยังเป็น pending นานเกิน 20 วินาที
+            # 1. Pending Hang Check: command remains pending for > 20s
             if ($script:currentStatus -eq "pending") {
                 $pendingSec = ($now - $script:jobStartTime).TotalSeconds
                 if ($pendingSec -ge 20) {
                     $script:hangDetected = $true
-                    $script:hangReason = "Pending Timeout ($([int]$pendingSec)s > 20s - ไม่พบ Agent รับงาน)"
+                    $script:hangReason = "Pending Timeout ($([int]$pendingSec)s > 20s - No agent picked up the job)"
                     return $true
                 }
             }
-            # 2. ตรวจสอบ Running Hang: หากสถานะเป็น running แต่นิ่งสนิทไร้ Heartbeat และไร้ Output นานเกิน 30 วินาที
+            # 2. Running Hang Check: command running but silent without heartbeat/output > 30s
             elseif ($script:currentStatus -eq "running") {
                 $silentSec = ($now - $script:lastActiveTime).TotalSeconds
                 if ($silentSec -ge 30) {
                     $script:hangDetected = $true
-                    $script:hangReason = "Running Stalled ($([int]$silentSec)s > 30s - คำสั่งหรือ Thread นิ่งสนิทไร้ Heartbeat)"
+                    $script:hangReason = "Running Stalled ($([int]$silentSec)s > 30s - Command/Thread stalled without heartbeat)"
                     return $true
                 }
             }
             return $false
         }
 
-        # ประมวลผล Object สถานะ
+        # Process status object
         function Process-JobStatusObject {
             param([PSCustomObject]$statusCheck)
             if (-not $statusCheck) { return $false }
@@ -1258,11 +1258,11 @@ try {
             return $false
         }
 
-        # เริ่มต้นลูปฟังผลลัพธ์ (Dual-Engine SSE Push + Watchdog Monitor)
+        # Start listening loop (Dual-Engine SSE Push + Watchdog Monitor)
         Write-Host "`nListening for agent response (AI Watchdog Active)..." -ForegroundColor Yellow
         
         while ($stopwatch.Elapsed.TotalSeconds -lt $TimeoutSec -and -not $script:completed -and -not $script:hangDetected) {
-            # ตรวจสอบ Watchdog ก่อนเริ่มรอบ
+            # Check Watchdog before each loop
             if (Test-JobHangs) { break }
 
             try {
@@ -1340,7 +1340,7 @@ try {
             }
         }
 
-        # การจัดการผลลัพธ์ของรอบนี้
+        # Handle result of this attempt
         if ($script:completed) {
             $finalJobSuccess = $true
             break
@@ -1348,9 +1348,9 @@ try {
 
         if ($script:hangDetected) {
             Write-Host "`n======================================================================" -ForegroundColor Yellow
-            Write-Host " [AI WATCHDOG] ตรวจพบคำสั่งไม่ตอบสนอง: $script:hangReason" -ForegroundColor Yellow
+            Write-Host " [AI WATCHDOG] Unresponsive command detected: $script:hangReason" -ForegroundColor Yellow
             Write-Host "======================================================================" -ForegroundColor Yellow
-            Write-Host "  -> กำลังส่ง Emergency Abort ยกเลิกคำสั่งเดิม (Job ID: $jobId)..." -ForegroundColor Red
+            Write-Host "  -> Sending Emergency Abort to cancel current job (Job ID: $jobId)..." -ForegroundColor Red
             try {
                 $abortUrl = $script:checkUrl.Replace(".json", "/abort.json")
                 $null = Invoke-FirebaseHttp -Uri $abortUrl -Method "PUT" -Body "true" -TimeoutSec 5
@@ -1359,16 +1359,16 @@ try {
 
             if ($retryAttempt -lt $maxRetries) {
                 $retryAttempt++
-                Write-Host "  -> เริ่มต้นส่งคำสั่งซ้ำอัตโนมัติรอบที่ $retryAttempt/$maxRetries (Auto-Retry)..." -ForegroundColor Cyan
+                Write-Host "  -> Starting auto-retry attempt $retryAttempt/$maxRetries..." -ForegroundColor Cyan
                 Write-Host "======================================================================`n" -ForegroundColor Yellow
                 Start-Sleep -Seconds 2
                 continue
             } else {
-                # กรณีค้างซ้ำหลัง Retry ครบแล้ว ➔ ดำเนินการ Escalation สั่ง Agent Auto-Restart
+                # Escalation: if stalled after retries -> trigger Agent Auto-Restart
                 if (-not $agentRestartDone) {
                     $agentRestartDone = $true
-                    Write-Host "  -> [ESCALATION] ตรวจพบคำสั่งยังคงค้างหลัง Retry! กำลังสั่ง Auto-Restart Agent..." -ForegroundColor Red
-                    Write-Host "  -> ส่งคำสั่งพิเศษ In-Place Reset (คงรหัส PIN เดิม: [ $SecretKey ])..." -ForegroundColor Yellow
+                    Write-Host "  -> [ESCALATION] Command still stalled after retries! Triggering Auto-Restart Agent..." -ForegroundColor Red
+                    Write-Host "  -> Sending In-Place Reset command (preserving PIN: [ $SecretKey ])..." -ForegroundColor Yellow
                     
                     $rstJobId = "job-rst-" + [Guid]::NewGuid().ToString().Substring(0, 8)
                     $rstBody = @{
@@ -1384,21 +1384,21 @@ try {
                     try {
                         $rstUrl = $BaseUrl + "jobs/$SecretKey/$rstJobId.json"
                         $null = Invoke-FirebaseHttp -Uri $rstUrl -Method "PUT" -Body $rstBody -TimeoutSec 10
-                        Write-Host "  -> ส่งสัญญาณ Auto-Restart สำเร็จ! รอให้ Agent รีเซ็ตเครื่อง 5 วินาที..." -ForegroundColor Green
+                        Write-Host "  -> Auto-Restart signal sent successfully! Waiting 5s for agent reset..." -ForegroundColor Green
                     } catch {
-                        Write-Host "  -> [WARNING] ไม่สามารถส่งสัญญาณ Auto-Restart: $_" -ForegroundColor DarkYellow
+                        Write-Host "  -> [WARNING] Failed to send Auto-Restart signal: $_" -ForegroundColor DarkYellow
                     }
                     
                     Start-Sleep -Seconds 5
                     
-                    Write-Host "  -> ดำเนินการส่งคำสั่งจริงใหม่อีกครั้งหลัง Agent รีเซ็ตเสร็จสิ้น..." -ForegroundColor Cyan
+                    Write-Host "  -> Resending original command after agent reset..." -ForegroundColor Cyan
                     Write-Host "======================================================================`n" -ForegroundColor Yellow
                     $retryAttempt = 0
-                    $maxRetries = 0 # ให้รอบนี้เป็น Final Attempt หลัง Restart
+                    $maxRetries = 0 # Final attempt after restart
                     continue
                 } else {
-                    Write-Host "`n[AI WATCHDOG] ยุติการทำงาน: ระบบพยายาม Auto-Retry และ Restart Agent แล้วแต่ยังไม่ตอบสนอง" -ForegroundColor Red
-                    Write-Host "กรุณาตรวจสอบเซิร์ฟเวอร์ปลายทาง หรือตรวจสอบ PIN: [ $SecretKey ]" -ForegroundColor Yellow
+                    Write-Host "`n[AI WATCHDOG] Aborting: System attempted Auto-Retry and Agent Restart but target is still unresponsive." -ForegroundColor Red
+                    Write-Host "Please verify the target server status or verify target PIN: [ $SecretKey ]" -ForegroundColor Yellow
                     break
                 }
             }

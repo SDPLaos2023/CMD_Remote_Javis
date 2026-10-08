@@ -1,5 +1,5 @@
 """
-capture.py - จับภาพหน้าต่างเป้าหมายหรือทั้งหน้าจอ เซฟเป็น PNG และแปลง Base64
+capture.py - Capture target window or full desktop screenshot, save to PNG and base64
 """
 
 import base64

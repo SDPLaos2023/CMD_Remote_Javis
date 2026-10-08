@@ -1,11 +1,11 @@
 <#
 .SYNOPSIS
     BB_JAVIS Enterprise API Key Generator
-    ระบบสร้าง Signed API Key ด้วยเทคโนโลยี HMAC-SHA256 Cryptographic Signature
+    Generates HMAC-SHA256 Signed API Keys
 
 .DESCRIPTION
-    สร้าง API Key ที่ปลอดภัยสูง ป้องกันการปลอมแปลง 100% โดยไม่ต้องเชื่อมต่อฐานข้อมูล
-    รูปแบบคีย์: bbj_<tenant>_<timestamp>_<signature>
+    High-security stateless API Key generator without requiring database queries.
+    Format: bbj_<tenant>_<timestamp>_<signature>
 #>
 
 [CmdletBinding()]
@@ -16,7 +16,7 @@ param(
     [switch]$CopyToClipboard
 )
 
-# บังคับการเข้ารหัส UTF-8
+# Force UTF-8 Encoding
 $OutputEncoding = [System.Text.Encoding]::UTF8
 [Console]::OutputEncoding = [System.Text.Encoding]::UTF8
 
@@ -24,17 +24,17 @@ Write-Host "====================================================================
 Write-Host "              BB_JAVIS ENTERPRISE API KEY GENERATOR                   " -ForegroundColor Yellow
 Write-Host "======================================================================" -ForegroundColor DarkCyan
 
-# 1. ทำความสะอาดชื่อ Tenant (เฉพาะ a-z, 0-9)
+# 1. Clean Tenant name (a-z, 0-9 only)
 $cleanTenant = ($Tenant -replace "[^a-zA-Z0-9]", "").ToLower()
 if ([string]::IsNullOrWhiteSpace($cleanTenant)) {
     $cleanTenant = "default"
 }
 
-# 2. คำนวณ Timestamp ในรูปแบบ Hex (Unix Epoch วินาที)
+# 2. Compute Hex Unix Epoch timestamp
 $unixTime = [int][double]::Parse((Get-Date -UFormat %s))
 $timeHex = $unixTime.ToString("x8")
 
-# 3. คำนวณ HMAC-SHA256
+# 3. Compute HMAC-SHA256 signature
 $payload = "$cleanTenant`:$timeHex"
 $hmac = New-Object System.Security.Cryptography.HMACSHA256
 $hmac.Key = [System.Text.Encoding]::UTF8.GetBytes($MasterSecret)
@@ -42,7 +42,7 @@ $hashBytes = $hmac.ComputeHash([System.Text.Encoding]::UTF8.GetBytes($payload))
 $hashHex = ($hashBytes | ForEach-Object { $_.ToString("x2") }) -join ""
 $signature = $hashHex.Substring(0, 32)
 
-# 4. ประกอบเป็น BB_JAVIS API Key
+# 4. Assemble BB_JAVIS API Key
 $apiKey = "bbj_${cleanTenant}_${timeHex}_${signature}"
 
 Write-Host "  -> Tenant Name : " -NoNewline -ForegroundColor Gray
@@ -54,7 +54,7 @@ Write-Host "  Generated API Key:" -ForegroundColor Cyan
 Write-Host "  $apiKey" -ForegroundColor Yellow
 Write-Host "----------------------------------------------------------------------" -ForegroundColor DarkGray
 
-# 5. ตัวเลือกคัดลอกลง Clipboard
+# 5. Optional Clipboard Copy
 if ($CopyToClipboard.IsPresent) {
     try {
         Set-Clipboard -Value $apiKey
@@ -62,7 +62,7 @@ if ($CopyToClipboard.IsPresent) {
     } catch {}
 }
 
-# 6. ตัวเลือกบันทึกจำลงเครื่องนี้ทันที
+# 6. Optional Local Machine Persistence
 if ($SaveToThisMachine.IsPresent) {
     $configDir = Join-Path $env:LOCALAPPDATA "BB_Javis"
     if (-not (Test-Path $configDir)) {
