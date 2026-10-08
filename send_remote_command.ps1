@@ -182,7 +182,7 @@ function Get-RegisteredDevices {
     $devUrl = $TargetBaseUrl + "devices.json"
     $devList = [System.Collections.Generic.List[PSCustomObject]]::new()
     try {
-        $raw = Invoke-FirebaseHttp -Uri $devUrl -Method "GET" -TimeoutSec 5
+        $raw = Invoke-FirebaseHttp -Uri $devUrl -Method "GET" -TimeoutSec 12
         if (-not [string]::IsNullOrWhiteSpace($raw) -and $raw.Trim() -ne "null" -and $raw.Trim().StartsWith("{")) {
             $data = ConvertFrom-Json -InputObject $raw.Trim() -ErrorAction SilentlyContinue
             if ($data -and $data -is [System.Management.Automation.PSCustomObject]) {
