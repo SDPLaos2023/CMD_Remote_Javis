@@ -70,6 +70,10 @@ function Get-OrPromptJavisApiKey {
         } catch {}
     }
 
+    if (-not [Environment]::UserInteractive -or [Console]::IsInputRedirected) {
+        return "bbj_guest_00000000_00000000000000000000000000000000"
+    }
+
     Write-Host ""
     Write-Host "======================================================================" -ForegroundColor DarkCyan
     Write-Host "                  BB_JAVIS ENTERPRISE AUTHENTICATION                  " -ForegroundColor Yellow
