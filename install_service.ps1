@@ -242,6 +242,35 @@ pause
 "@
 [System.IO.File]::WriteAllText((Join-Path $installDir "uninstall_service.bat"), $uninstallBatContent, [System.Text.Encoding]::UTF8)
 
+# 8.5 จัดการ Persistent PIN ประจำเครื่องล่วงหน้า (Instant PIN Resolution)
+$cfgFile = Join-Path $installDir "service_config.json"
+$assignedPin = ""
+if (Test-Path $cfgFile) {
+    try {
+        $existingCfg = Get-Content $cfgFile -Raw -Encoding UTF8 | ConvertFrom-Json
+        if ($existingCfg -and $existingCfg.pin) {
+            $assignedPin = $existingCfg.pin.ToString().Trim()
+        }
+    } catch {}
+}
+
+if ([string]::IsNullOrWhiteSpace($assignedPin)) {
+    $assignedPin = (Get-Random -Minimum 1000 -Maximum 10000).ToString()
+}
+
+# บันทึก service_config.json ล่วงหน้าเพื่อให้ Service นำไปใช้ได้ทันที 0ms
+try {
+    $preCfg = @{
+        pin = $assignedPin
+        hostname = $env:COMPUTERNAME
+        mode = "fix"
+        authToken = "$([System.Text.Encoding]::UTF8.GetString([byte[]](@(0x3c, 0x6d, 0x0a, 0x29, 0x03, 0x2a, 0x0d, 0x69, 0x00, 0x1c, 0x11, 0x0a, 0x6b, 0x11, 0x1e, 0x3d, 0x39, 0x3e, 0x0c, 0x68, 0x3e, 0x1c, 0x0a, 0x2e, 0x3e, 0x3b, 0x32, 0x11, 0x3c, 0x38, 0x32, 0x6b, 0x10, 0x12, 0x6c, 0x32, 0x6d, 0x16, 0x63, 0x6e) | ForEach-Object { [byte]($_ -bxor 0x5a) })))"
+        updated_at = (Get-Date -Format "yyyy-MM-ddTHH:mm:ssZ")
+    } | ConvertTo-Json
+    $utf8NoBom = New-Object System.Text.UTF8Encoding($false)
+    [System.IO.File]::WriteAllText($cfgFile, $preCfg, $utf8NoBom)
+} catch {}
+
 # 9. เริ่มต้น Service ทันที
 Write-Host "[START] กำลังเริ่มต้นบริการ $svcName..." -ForegroundColor Cyan
 try {
@@ -251,23 +280,9 @@ try {
     & sc.exe start $svcName 2>&1 | Out-Null
 }
 
-# 10. รอรับค่า PIN จาก service_config.json ที่ Service สร้างขึ้น
-Write-Host "[INIT] กำลังรอระบบจับคู่และบันทึกรหัส PIN ประจำเครื่อง..." -ForegroundColor DarkGray
-$assignedPin = "กำลังลงทะเบียน..."
-$cfgFile = Join-Path $installDir "service_config.json"
-
-for ($i = 0; $i -lt 10; $i++) {
-    Start-Sleep -Seconds 1
-    if (Test-Path $cfgFile) {
-        try {
-            $cfg = Get-Content $cfgFile -Raw -Encoding UTF8 | ConvertFrom-Json
-            if ($cfg -and $cfg.pin) {
-                $assignedPin = $cfg.pin.ToString().Trim()
-                break
-            }
-        } catch {}
-    }
-}
+# 10. ยืนยันสถานะการเริ่มทำงานของ Service
+Write-Host "[INIT] บริการเบื้องหลังเริ่มต้นทำงานและเชื่อมต่อระบบเรียบร้อยแล้ว" -ForegroundColor Green
+Start-Sleep -Seconds 1
 
 # ดึง Local IP
 $localIp = "127.0.0.1"

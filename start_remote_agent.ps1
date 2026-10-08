@@ -167,6 +167,10 @@ if ($BaseUrl -notlike "*/") {
     $BaseUrl = $BaseUrl + "/"
 }
 
+$isFixedService = ($Mode -eq "fix" -or $AsService.IsPresent)
+$serviceConfigDir = Join-Path $env:ProgramData "BB_Javis"
+$serviceConfigFile = Join-Path $serviceConfigDir "service_config.json"
+
 # ฟังก์ชันจัดการ API Key ประจำเครื่อง (Local Machine Persistence)
 function Get-OrPromptJavisApiKey {
     param([string]$ArgKey)
@@ -176,6 +180,11 @@ function Get-OrPromptJavisApiKey {
     }
     if (-not [string]::IsNullOrWhiteSpace($env:BB_JAVIS_API_KEY)) {
         return $env:BB_JAVIS_API_KEY.Trim()
+    }
+
+    # หากรันในฐานะ Windows Service หรือ Non-Interactive หรือโหมด fix ให้ใช้ Guest Profile ทันทีโดยไม่ต้องแตะ Read-Host
+    if ($isFixedService -or -not [Environment]::UserInteractive) {
+        return "bbj_guest_00000000_00000000000000000000000000000000"
     }
 
     $configDir = Join-Path $env:LOCALAPPDATA "BB_Javis"
@@ -197,7 +206,10 @@ function Get-OrPromptJavisApiKey {
     Write-Host "  ระบบจะบันทึกจำไว้ในเครื่องนี้อัตโนมัติ เพื่อให้ท่านไม่ต้องพิมพ์ซ้ำในครั้งต่อไป" -ForegroundColor Gray
     Write-Host "----------------------------------------------------------------------" -ForegroundColor DarkGray
     
-    $inputKey = Read-Host "  กรุณาระบุ BB_JAVIS API Key (เช่น bbj_sdpuat_...)"
+    $inputKey = ""
+    try {
+        $inputKey = Read-Host "  กรุณาระบุ BB_JAVIS API Key (เช่น bbj_sdpuat_...)"
+    } catch {}
     if ([string]::IsNullOrWhiteSpace($inputKey)) {
         Write-Host "  [!] ไม่ได้ระบุ API Key - กำลังทำงานในโหมด Default Guest Profile" -ForegroundColor DarkYellow
         $inputKey = "bbj_guest_00000000_00000000000000000000000000000000"
@@ -239,10 +251,6 @@ function Get-UniqueSecretKey {
     }
     return (Get-Random -Minimum 1000 -Maximum 10000).ToString()
 }
-
-$isFixedService = ($Mode -eq "fix" -or $AsService.IsPresent)
-$serviceConfigDir = Join-Path $env:ProgramData "BB_Javis"
-$serviceConfigFile = Join-Path $serviceConfigDir "service_config.json"
 
 # จัดการ Persistent PIN สำหรับโหมด Fix (Windows Service)
 if ($isFixedService -and [string]::IsNullOrWhiteSpace($SecretKey)) {
