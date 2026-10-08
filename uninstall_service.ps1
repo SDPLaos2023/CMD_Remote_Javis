@@ -1,8 +1,7 @@
-﻿<#
-.SYNOPSIS
-    BB_JAVIS Remote - Windows Service Automated Uninstaller (da.gd/bbj-unfix)
-    ถอนการติดตั้ง Windows Service และลบข้อมูลออกจากเครื่องและ Cloud
-#>
+# ======================================================================
+# BB_JAVIS Remote - Windows Service Automated Uninstaller (da.gd/bbj-unfix)
+# ถอนการติดตั้ง Windows Service และลบข้อมูลออกจากเครื่องและ Cloud
+# ======================================================================
 
 $OutputEncoding = [System.Text.Encoding]::UTF8
 [Console]::OutputEncoding = [System.Text.Encoding]::UTF8
@@ -60,14 +59,17 @@ if ($existingSvc) {
 }
 
 # 3. ตรวจสอบปิดโปรเซสที่อาจยังค้างอยู่
-Get-Process powershell -ErrorAction SilentlyContinue | Where-Object { $_.Path -like "*powershell*" } | ForEach-Object {
-    try {
-        $cmd = (Get-CimInstance Win32_Process -Filter "ProcessId = $($_.Id)" -ErrorAction SilentlyContinue).CommandLine
-        if ($cmd -and $cmd -like "*BB_Javis*") {
-            Stop-Process -Id $_.Id -Force -ErrorAction SilentlyContinue
-        }
-    } catch {}
-}
+try {
+    Get-Process -Name "BBJavisService" -ErrorAction SilentlyContinue | Stop-Process -Force -ErrorAction SilentlyContinue
+    Get-Process powershell -ErrorAction SilentlyContinue | Where-Object { $_.Path -like "*powershell*" } | ForEach-Object {
+        try {
+            $cmd = (Get-CimInstance Win32_Process -Filter "ProcessId = $($_.Id)" -ErrorAction SilentlyContinue).CommandLine
+            if ($cmd -and ($cmd -like "*BB_Javis*" -or $cmd -like "*start_remote_agent*")) {
+                Stop-Process -Id $_.Id -Force -ErrorAction SilentlyContinue
+            }
+        } catch {}
+    }
+} catch {}
 
 # 4. ลบไฟล์การทำงานใน C:\ProgramData\BB_Javis
 if (Test-Path $installDir) {

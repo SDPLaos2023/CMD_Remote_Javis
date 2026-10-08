@@ -1,8 +1,7 @@
-﻿<#
-.SYNOPSIS
-    BB_JAVIS Remote - Windows Service Automated Installer (da.gd/bbj-fix)
-    ติดตั้ง Agent เป็น Background Windows Service รันตลอด 24 ชม. อัตโนมัติ (Zero-Dependency)
-#>
+# ======================================================================
+# BB_JAVIS Remote - Windows Service Automated Installer (da.gd/bbj-fix)
+# ติดตั้ง Agent เป็น Background Windows Service รันตลอด 24 ชม. อัตโนมัติ (Zero-Dependency)
+# ======================================================================
 
 # บังคับการเข้ารหัส Console เป็น UTF-8
 $OutputEncoding = [System.Text.Encoding]::UTF8
@@ -26,11 +25,34 @@ if (-not $isAdmin) {
     return
 }
 
+$svcName = "BB_JAVIS_Remote"
 $installDir = "C:\ProgramData\BB_Javis"
 if (-not (Test-Path $installDir)) {
     $null = New-Item -ItemType Directory -Path $installDir -Force
     Write-Host "[SETUP] สร้างโฟลเดอร์สำหรับ Service: $installDir" -ForegroundColor Green
 }
+
+# 1.1 หยุดและลบ Service เดิมก่อนเสมอ (เพื่อปลดล็อกไฟล์ BBJavisService.exe และทรัพยากร)
+$existingSvc = Get-Service -Name $svcName -ErrorAction SilentlyContinue
+if ($existingSvc) {
+    Write-Host "[SERVICE] พบ Service เดิม กำลังหยุดและปลดล็อกไฟล์..." -ForegroundColor Yellow
+    & sc.exe stop $svcName 2>&1 | Out-Null
+    Start-Sleep -Seconds 2
+    & sc.exe delete $svcName 2>&1 | Out-Null
+    Start-Sleep -Seconds 1
+}
+
+# บังคับปิด Process เก่าที่ค้างอยู่ใน C:\ProgramData\BB_Javis
+try {
+    Get-Process -Name "BBJavisService" -ErrorAction SilentlyContinue | Stop-Process -Force -ErrorAction SilentlyContinue
+    Get-Process -Name "powershell" -ErrorAction SilentlyContinue | Where-Object {
+        try {
+            $cmd = (Get-CimInstance Win32_Process -Filter "ProcessId = $($_.Id)" -ErrorAction SilentlyContinue).CommandLine
+            $cmd -like "*BB_Javis*" -or $cmd -like "*start_remote_agent*"
+        } catch { $false }
+    } | Stop-Process -Force -ErrorAction SilentlyContinue
+} catch {}
+Start-Sleep -Milliseconds 500
 
 # 2. ตั้งค่า Windows Defender Exclusion สำหรับโฟลเดอร์รันงาน
 try {
@@ -38,11 +60,11 @@ try {
     Add-MpPreference -ExclusionPath $installDir -ErrorAction SilentlyContinue
 } catch {}
 
-# 3. จัดเตรียมไฟล์ start_remote_agent.ps1
-$localAgent = Join-Path $PSScriptRoot "start_remote_agent.ps1"
+# 3. จัดเตรียมไฟล์ start_remote_agent.ps1 (รองรับทั้ง Local และ Remote irm | iex)
+$localAgent = if (-not [string]::IsNullOrWhiteSpace($PSScriptRoot)) { Join-Path $PSScriptRoot "start_remote_agent.ps1" } else { $null }
 $targetAgent = Join-Path $installDir "start_remote_agent.ps1"
 
-if (Test-Path $localAgent) {
+if ($localAgent -and (Test-Path $localAgent)) {
     Copy-Item $localAgent $targetAgent -Force
     Write-Host "[COPY] คัดลอก start_remote_agent.ps1 ไปยัง $installDir เรียบร้อย" -ForegroundColor Green
 } else {
@@ -61,8 +83,8 @@ if (Test-Path $localAgent) {
 }
 
 # คัดลอก curl.exe หากมีอยู่
-$localCurl = Join-Path $PSScriptRoot "curl.exe"
-if (Test-Path $localCurl) {
+$localCurl = if (-not [string]::IsNullOrWhiteSpace($PSScriptRoot)) { Join-Path $PSScriptRoot "curl.exe" } else { $null }
+if ($localCurl -and (Test-Path $localCurl)) {
     Copy-Item $localCurl (Join-Path $installDir "curl.exe") -Force
 }
 
@@ -160,25 +182,23 @@ if (-not (Test-Path $csc)) {
 
 # 6. คอมไพล์ BBJavisService.exe
 $targetExe = Join-Path $installDir "BBJavisService.exe"
+if (Test-Path $targetExe) {
+    try { Remove-Item $targetExe -Force -ErrorAction SilentlyContinue } catch {}
+}
 Write-Host "[COMPILE] กำลังคอมไพล์ C# Windows Service Wrapper..." -ForegroundColor Cyan
 & $csc /nologo /target:exe /r:System.dll,System.ServiceProcess.dll /out:$targetExe $csSourcePath
 if ($LASTEXITCODE -ne 0 -or -not (Test-Path $targetExe)) {
-    Write-Host "[ERROR] คอมไพล์ BBJavisService.exe ไม่สำเร็จ (Exit code: $LASTEXITCODE)" -ForegroundColor Red
-    return
-}
-Write-Host "[COMPILE] คอมไพล์ BBJavisService.exe สำเร็จสมบูรณ์! (Native 100%)" -ForegroundColor Green
-
-# 7. ตรวจสอบและลงทะเบียน Service กับ Windows Service Control Manager (SCM)
-$svcName = "BB_JAVIS_Remote"
-$existingSvc = Get-Service -Name $svcName -ErrorAction SilentlyContinue
-if ($existingSvc) {
-    Write-Host "[SERVICE] พบ Service เดิม กำลังหยุดและลบการลงทะเบียนเดิม..." -ForegroundColor Yellow
-    & sc.exe stop $svcName 2>&1 | Out-Null
-    Start-Sleep -Seconds 1
-    & sc.exe delete $svcName 2>&1 | Out-Null
-    Start-Sleep -Seconds 1
+    if (Test-Path $targetExe) {
+        Write-Host "[REUSE] ไฟล์ wrapper เดิมยังคงใช้งานได้ กำลังดำเนินการลงทะเบียนต่อ..." -ForegroundColor Yellow
+    } else {
+        Write-Host "[ERROR] คอมไพล์ BBJavisService.exe ไม่สำเร็จ (Exit code: $LASTEXITCODE)" -ForegroundColor Red
+        return
+    }
+} else {
+    Write-Host "[COMPILE] คอมไพล์ BBJavisService.exe สำเร็จสมบูรณ์! (Native 100%)" -ForegroundColor Green
 }
 
+# 7. ลงทะเบียน Service กับ Windows Service Control Manager (SCM)
 Write-Host "[SERVICE] กำลังลงทะเบียน Windows Service: $svcName..." -ForegroundColor Cyan
 $binPathArg = "`"$targetExe`""
 & sc.exe create $svcName binPath= $binPathArg start= auto DisplayName= "BB_JAVIS Remote Agent Service" 2>&1 | Out-Null
