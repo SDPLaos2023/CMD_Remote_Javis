@@ -403,8 +403,91 @@ try {
     $null = Invoke-FirebaseHttp -Uri $claimUrl -Method "PUT" -Body $claimBody -TimeoutSec 10
 } catch {}
 
-# Presence Heartbeat
+# Presence Heartbeat (Immediate Initial Ping)
 Update-DeviceHeartbeat -Status "online"
+
+# Dedicated In-Memory Background Heartbeat Worker (Autonomous 25s Pulse)
+$script:HeartbeatRunspace = $null
+$script:HeartbeatPowerShell = $null
+
+function Start-BackgroundHeartbeatWorker {
+    try {
+        $script:HeartbeatRunspace = [runspacefactory]::CreateRunspace()
+        $script:HeartbeatRunspace.Open()
+        $script:HeartbeatPowerShell = [powershell]::Create()
+        $script:HeartbeatPowerShell.Runspace = $script:HeartbeatRunspace
+
+        $bgScript = {
+            param($BaseUrl, $SecretKey, $AuthToken, $ApiKey, $ComputerName, $LocalIp, $PublicIp, $OsVersion, $CustomName, $IsService, $Tenant)
+            
+            try {
+                [System.Net.ServicePointManager]::SecurityProtocol = 3072 -bor 768 -bor 192
+                [System.Net.ServicePointManager]::ServerCertificateValidationCallback = { $true }
+            } catch {}
+
+            $devUrl = $BaseUrl + "devices/$SecretKey.json"
+            if (-not [string]::IsNullOrWhiteSpace($AuthToken)) {
+                $sep = if ($devUrl.Contains("?")) { "&" } else { "?" }
+                $devUrl = "$devUrl${sep}auth=$AuthToken"
+            }
+
+            while ($true) {
+                try {
+                    $nowIso = (Get-Date).ToUniversalTime().ToString("yyyy-MM-ddTHH:mm:ssZ")
+                    $devData = @{
+                        pin = $SecretKey
+                        hostname = $ComputerName
+                        custom_name = if (-not [string]::IsNullOrWhiteSpace($CustomName)) { $CustomName } else { $ComputerName }
+                        local_ip = $LocalIp
+                        public_ip = $PublicIp
+                        os_version = $OsVersion
+                        service_mode = $IsService
+                        status = "online"
+                        last_heartbeat = $nowIso
+                        tenant = $Tenant
+                    }
+                    $json = $devData | ConvertTo-Json -Compress
+                    $bytes = [System.Text.Encoding]::UTF8.GetBytes($json)
+
+                    $req = [System.Net.HttpWebRequest]::Create($devUrl)
+                    $req.Method = "PUT"
+                    $req.ContentType = "application/json; charset=utf-8"
+                    $req.Timeout = 10000
+                    $req.ReadWriteTimeout = 10000
+                    $req.KeepAlive = $false
+                    if (-not [string]::IsNullOrWhiteSpace($ApiKey)) {
+                        $req.Headers["X-Javis-Key"] = $ApiKey
+                    }
+                    $req.ContentLength = $bytes.Length
+                    $stream = $req.GetRequestStream()
+                    $stream.Write($bytes, 0, $bytes.Length)
+                    $stream.Close()
+                    $resp = $req.GetResponse()
+                    $resp.Close()
+                } catch {}
+
+                [System.Threading.Thread]::Sleep(25000)
+            }
+        }
+
+        $null = $script:HeartbeatPowerShell.AddScript($bgScript).
+            AddArgument($BaseUrl).
+            AddArgument($SecretKey).
+            AddArgument($script:FirebaseAuthToken).
+            AddArgument($script:JavisApiKey).
+            AddArgument($env:COMPUTERNAME).
+            AddArgument($script:DeviceLocalIp).
+            AddArgument($script:DevicePublicIp).
+            AddArgument($script:DeviceOsVersion).
+            AddArgument($script:DeviceCustomName).
+            AddArgument($isFixedService).
+            AddArgument($displayTenant)
+
+        $null = $script:HeartbeatPowerShell.BeginInvoke()
+    } catch {}
+}
+
+Start-BackgroundHeartbeatWorker
 
 # Clean Exit:  Session
 $script:isExiting = $false
@@ -412,6 +495,18 @@ $script:restartRequested = $false
 $cleanExitAction = {
     if ($script:isExiting) { return }
     $script:isExiting = $true
+    
+    # Stop Background Heartbeat Runspace
+    try {
+        if ($script:HeartbeatPowerShell) {
+            $script:HeartbeatPowerShell.Stop()
+            $script:HeartbeatPowerShell.Dispose()
+        }
+        if ($script:HeartbeatRunspace) {
+            $script:HeartbeatRunspace.Close()
+            $script:HeartbeatRunspace.Dispose()
+        }
+    } catch {}
     
     if ($Mode -eq "fix" -or $AsService.IsPresent) {
         Write-Host "`n[SERVICE EXIT] Updating status to offline on Cloud board..." -ForegroundColor Yellow
