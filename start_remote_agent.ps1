@@ -11,11 +11,11 @@ param (
     [int]$PollIntervalSec = 3
 )
 
-# บังคับการเข้ารหัส Console เป็น UTF-8
+# Console  UTF-8
 $OutputEncoding = [System.Text.Encoding]::UTF8
 [Console]::OutputEncoding = [System.Text.Encoding]::UTF8
 
-# จัดการ Token ยืนยันสิทธิ์ฐานข้อมูล Firebase RTDB
+# Token  Firebase RTDB
 if ([string]::IsNullOrWhiteSpace($FirebaseAuthToken)) {
     if (-not [string]::IsNullOrWhiteSpace($env:BB_JAVIS_AUTH_TOKEN)) {
         $FirebaseAuthToken = $env:BB_JAVIS_AUTH_TOKEN.Trim()
@@ -23,7 +23,7 @@ if ([string]::IsNullOrWhiteSpace($FirebaseAuthToken)) {
 }
 $script:FirebaseAuthToken = $FirebaseAuthToken
 
-# เปิดใช้งานโปรโตคอลความปลอดภัย TLS 1.2 และปลดล็อก Connection Pool Limit (ป้องกัน Deadlock)
+# TLS 1.2  Connection Pool Limit ( Deadlock)
 try {
     [System.Net.ServicePointManager]::SecurityProtocol = 3072 -bor 768 -bor 192
     [System.Net.ServicePointManager]::DefaultConnectionLimit = 128
@@ -32,14 +32,14 @@ try {
 } catch {}
 [System.Net.ServicePointManager]::ServerCertificateValidationCallback = { $true }
 
-# Pre-load Core Assemblies สำหรับ Zero-Latency In-Memory Execution
+# Pre-load Core Assemblies  Zero-Latency In-Memory Execution
 try {
     Add-Type -AssemblyName System.Windows.Forms -ErrorAction SilentlyContinue
     Add-Type -AssemblyName System.Drawing -ErrorAction SilentlyContinue
     Add-Type -AssemblyName System.IO.Compression.FileSystem -ErrorAction SilentlyContinue
 } catch {}
 
-# กำหนดข้อยกเว้น Windows Defender ในโฟลเดอร์ TEMP (หากรันในสิทธิ์ Administrator)
+# Windows Defender  TEMP ( Administrator)
 try {
     $currentUser = [Security.Principal.WindowsPrincipal][Security.Principal.WindowsIdentity]::GetCurrent()
     $isAdmin = $currentUser.IsInRole([Security.Principal.WindowsBuiltInRole]::Administrator)
@@ -49,7 +49,7 @@ try {
     }
 } catch {}
 
-# ตรวจสอบคำสั่งติดตั้งหรือถอนการติดตั้ง Service
+# Service
 if ($InstallService.IsPresent) {
     $installScript = Join-Path $PSScriptRoot "install_service.ps1"
     if (Test-Path $installScript) {
@@ -63,7 +63,7 @@ if ($InstallService.IsPresent) {
             $wc.Dispose()
             Invoke-Expression $code
         } catch {
-            Write-Host "[ERROR] ไม่สามารถดาวน์โหลด install_service.ps1: $_" -ForegroundColor Red
+            Write-Host "[ERROR] Cannot download install_service.ps1: $_" -ForegroundColor Red
         }
     }
     return
@@ -82,13 +82,13 @@ if ($UninstallService.IsPresent) {
             $wc.Dispose()
             Invoke-Expression $code
         } catch {
-            Write-Host "[ERROR] ไม่สามารถดาวน์โหลด uninstall_service.ps1: $_" -ForegroundColor Red
+            Write-Host "[ERROR] Cannot download uninstall_service.ps1: $_" -ForegroundColor Red
         }
     }
     return
 }
 
-# ฟังก์ชัน Native .NET HTTP Client (Zero-Dependency 100% ไม่ต้องพึ่งพา curl.exe)
+# Native .NET HTTP Client (Zero-Dependency 100%  curl.exe)
 function Invoke-FirebaseHttp {
     param(
         [Parameter(Mandatory=$true)][string]$Uri,
@@ -161,7 +161,7 @@ function Invoke-FirebaseHttp {
 
 $utf8NoBom = New-Object System.Text.UTF8Encoding($false)
 
-# กำหนด URL ฐานข้อมูลปลายทาง (รองรับ GatewayUrl หรือ Fallback สู่ FirebaseUrl)
+# URL  ( GatewayUrl  Fallback  FirebaseUrl)
 $BaseUrl = if (-not [string]::IsNullOrWhiteSpace($GatewayUrl)) { $GatewayUrl } else { $FirebaseUrl }
 if ($BaseUrl -notlike "*/") {
     $BaseUrl = $BaseUrl + "/"
@@ -171,7 +171,7 @@ $isFixedService = ($Mode -eq "fix" -or $AsService.IsPresent)
 $serviceConfigDir = Join-Path $env:ProgramData "BB_Javis"
 $serviceConfigFile = Join-Path $serviceConfigDir "service_config.json"
 
-# ฟังก์ชันจัดการ API Key ประจำเครื่อง (Local Machine Persistence)
+# API Key  (Local Machine Persistence)
 function Get-OrPromptJavisApiKey {
     param([string]$ArgKey)
 
@@ -182,7 +182,7 @@ function Get-OrPromptJavisApiKey {
         return $env:BB_JAVIS_API_KEY.Trim()
     }
 
-    # หากรันในฐานะ Windows Service หรือ Non-Interactive หรือโหมด fix ให้ใช้ Guest Profile ทันทีโดยไม่ต้องแตะ Read-Host
+    # Windows Service  Non-Interactive  fix  Guest Profile  Read-Host
     if ($isFixedService -or -not [Environment]::UserInteractive) {
         return "bbj_guest_00000000_00000000000000000000000000000000"
     }
@@ -202,16 +202,16 @@ function Get-OrPromptJavisApiKey {
     Write-Host "======================================================================" -ForegroundColor DarkCyan
     Write-Host "                  BB_JAVIS ENTERPRISE AUTHENTICATION                  " -ForegroundColor Yellow
     Write-Host "======================================================================" -ForegroundColor DarkCyan
-    Write-Host "  [!] ไม่พบ API Key บนเครื่องนี้ ($configFile)" -ForegroundColor Yellow
-    Write-Host "  ระบบจะบันทึกจำไว้ในเครื่องนี้อัตโนมัติ เพื่อให้ท่านไม่ต้องพิมพ์ซ้ำในครั้งต่อไป" -ForegroundColor Gray
+    Write-Host "  [!] Javis API Key not found on this machine ($configFile)" -ForegroundColor Yellow
+    Write-Host "  System will remember this key automatically on this machine" -ForegroundColor Gray
     Write-Host "----------------------------------------------------------------------" -ForegroundColor DarkGray
     
     $inputKey = ""
     try {
-        $inputKey = Read-Host "  กรุณาระบุ BB_JAVIS API Key (เช่น bbj_sdpuat_...)"
+        $inputKey = Read-Host "  Please enter BB_JAVIS API Key (e.g. bbj_sdpuat_...)"
     } catch {}
     if ([string]::IsNullOrWhiteSpace($inputKey)) {
-        Write-Host "  [!] ไม่ได้ระบุ API Key - กำลังทำงานในโหมด Default Guest Profile" -ForegroundColor DarkYellow
+        Write-Host "  [!] No API Key provided - running in Default Guest Profile" -ForegroundColor DarkYellow
         $inputKey = "bbj_guest_00000000_00000000000000000000000000000000"
     } else {
         $inputKey = $inputKey.Trim()
@@ -225,7 +225,7 @@ function Get-OrPromptJavisApiKey {
             $json = $saveObj | ConvertTo-Json
             $utf8NoBom = New-Object System.Text.UTF8Encoding($false)
             [System.IO.File]::WriteAllText($configFile, $json, $utf8NoBom)
-            Write-Host "  [SAVED] บันทึก API Key ลงเครื่องเรียบร้อยแล้ว!" -ForegroundColor Green
+            Write-Host "  [SAVED] API Key saved to machine successfully!" -ForegroundColor Green
         } catch {}
     }
     Write-Host "======================================================================`n" -ForegroundColor DarkCyan
@@ -234,7 +234,7 @@ function Get-OrPromptJavisApiKey {
 
 $script:JavisApiKey = Get-OrPromptJavisApiKey -ArgKey $ApiKey
 
-# ฟังก์ชันสุ่ม PIN 4 หลักพร้อมตรวจสอบความซ้ำซ้อนกับ Command Board (Anti-Collision Guard)
+# PIN 4  Command Board (Anti-Collision Guard)
 function Get-UniqueSecretKey {
     param([string]$TargetBaseUrl)
     for ($attempt = 0; $attempt -lt 15; $attempt++) {
@@ -254,7 +254,7 @@ function Get-UniqueSecretKey {
 
 $script:DeviceCustomName = $env:COMPUTERNAME
 
-# จัดการ Persistent PIN สำหรับโหมด Fix (Windows Service)
+# Persistent PIN  Fix (Windows Service)
 if ($isFixedService -and [string]::IsNullOrWhiteSpace($SecretKey)) {
     if (Test-Path $serviceConfigFile) {
         try {
@@ -290,7 +290,7 @@ if ([string]::IsNullOrWhiteSpace($SecretKey)) {
     $SecretKey = $SecretKey.Trim()
 }
 
-# บันทึก Persistent PIN ประจำเครื่องหากเป็นโหมด Fix
+# Persistent PIN  Fix
 if ($isFixedService) {
     try {
         if (-not (Test-Path $serviceConfigDir)) { $null = New-Item -ItemType Directory -Path $serviceConfigDir -Force }
@@ -307,7 +307,7 @@ if ($isFixedService) {
     } catch {}
 }
 
-# สกัดข้อมูล Tenant จาก API Key
+# Tenant  API Key
 $displayTenant = "Default"
 $keyParts = $script:JavisApiKey.Split('_')
 if ($keyParts.Length -ge 2 -and $keyParts[0] -eq 'bbj') {
@@ -319,7 +319,7 @@ $maskedKey = if ($script:JavisApiKey.Length -gt 15) {
     "Configured"
 }
 
-# ฟังก์ชันสกัดข้อมูลเครื่องและเครือข่ายสำหรับ Heartbeat
+# Heartbeat
 function Get-LocalIPv4 {
     try {
         $ip = (Get-NetIPAddress -AddressFamily IPv4 -InterfaceAlias * -ErrorAction SilentlyContinue |
@@ -394,7 +394,7 @@ function Update-DeviceHeartbeat {
     } catch {}
 }
 
-# แสดงแบนเนอร์ข้อมูลระบบและรหัส Secret Key แบบ Professional
+# Secret Key  Professional
 Write-Host "======================================================================" -ForegroundColor DarkCyan
 Write-Host "              BB_JAVIS ENTERPRISE REMOTE EXECUTION AGENT              " -ForegroundColor Yellow
 Write-Host "======================================================================" -ForegroundColor DarkCyan
@@ -431,17 +431,17 @@ if (-not $AsService.IsPresent) {
     Write-Host "======================================================================" -ForegroundColor DarkCyan
 }
 
-# ลงทะเบียน PIN บน Cloud Command Board ป้องกันผู้อื่นสุ่มชน
+# PIN  Cloud Command Board
 try {
     $claimUrl = $BaseUrl + "jobs/$SecretKey/claim.json"
     $claimBody = '{"claimed_at":"' + (Get-Date -Format "yyyy-MM-dd HH:mm:ss") + '","status":"active","engine":"realtime_sse","tenant":"' + $displayTenant + '","hostname":"' + $env:COMPUTERNAME + '"}'
     $null = Invoke-FirebaseHttp -Uri $claimUrl -Method "PUT" -Body $claimBody -TimeoutSec 10
 } catch {}
 
-# ลงทะเบียนอุปกรณ์เข้าสู่ระบบ Presence Heartbeat
+# Presence Heartbeat
 Update-DeviceHeartbeat -Status "online"
 
-# ระบบ Clean Exit: จัดการสถานะและทำลายข้อมูล Session
+# Clean Exit:  Session
 $script:isExiting = $false
 $script:restartRequested = $false
 $cleanExitAction = {
@@ -469,7 +469,7 @@ $cleanExitAction = {
         } catch {}
     }
 
-    # เคลียร์ไฟล์ชั่วคราวใน TEMP (Zero-Footprint)
+    # TEMP (Zero-Footprint)
     Get-ChildItem -Path $env:TEMP -Filter "remote_script_*.ps1" -ErrorAction SilentlyContinue | Remove-Item -Force -ErrorAction SilentlyContinue
     Get-ChildItem -Path $env:TEMP -Filter "agent_*_temp.json" -ErrorAction SilentlyContinue | Remove-Item -Force -ErrorAction SilentlyContinue
     Write-Host "[SUCCESS] Cloud session finalized cleanly. Zero data residue." -ForegroundColor Green
@@ -484,7 +484,7 @@ try {
     [Console]::add_CancelKeyPress($cancelHandler)
 } catch {}
 
-# ฟังก์ชันประมวลผลคำสั่งระยะไกล (รองรับ Live Streaming, Emergency Abort และ Hard Timeout)
+# ( Live Streaming, Emergency Abort  Hard Timeout)
 function Execute-RemoteJob {
     param(
         [string]$JobId,
@@ -495,7 +495,7 @@ function Execute-RemoteJob {
 
     Write-Host "`n[NEW JOB] Received incoming job ID: $JobId" -ForegroundColor Yellow
 
-    # ตรวจสอบรหัส Secret Key เพื่อความปลอดภัยสูงสุด
+    # Secret Key
     if ($JobDetails.secret_key -ne $CurrentKey) {
         Write-Host " -> Access Denied: Secret Key mismatch! (Skipping job)" -ForegroundColor Red
         $patchBody = @{
@@ -515,7 +515,7 @@ function Execute-RemoteJob {
         $timeoutSec = [Math]::Max(10, [int]$JobDetails.timeout_sec)
     }
 
-    # ตรวจสอบคำสั่งพิเศษ System Restart (In-Place Agent Reset)
+    # System Restart (In-Place Agent Reset)
     if ($command -eq "__JAVIS_SYSTEM_RESTART__" -or $command -eq "restart-agent") {
         Write-Host " -> [SYSTEM RESTART] Special restart command received! Scheduling in-place reset..." -ForegroundColor Yellow
         $restartRes = @{
@@ -532,13 +532,13 @@ function Execute-RemoteJob {
         return
     }
 
-    # ตรวจสอบคำสั่งพิเศษเปลี่ยนชื่อ Host จากระยะไกล (Remote Rename / Set Alias)
+    # Host  (Remote Rename / Set Alias)
     if ($command -match "^@SET_ALIAS\s+(.+)$" -or $command -match "^@RENAME\s+(.+)$") {
         $newAlias = $Matches[1].Trim()
         Write-Host " -> [REMOTE RENAME] Special command received: Changing display name to '$newAlias'..." -ForegroundColor Yellow
         $script:DeviceCustomName = $newAlias
         
-        # บันทึกลง service_config.json
+        # service_config.json
         if (Test-Path $serviceConfigFile) {
             try {
                 $savedCfg = Get-Content $serviceConfigFile -Raw -Encoding UTF8 | ConvertFrom-Json
@@ -549,13 +549,13 @@ function Execute-RemoteJob {
             } catch {}
         }
 
-        # ยิง Heartbeat อัปเดตทันที
+        # Heartbeat
         Update-DeviceHeartbeat -Status "online"
 
         $renameRes = @{
             status = "completed"
             exit_code = 0
-            stdout = "[SUCCESS] เปลี่ยนชื่อเครื่องเป็น '$newAlias' เรียบร้อยแล้ว (อัปเดตลง Cloud และ Config สำเร็จ)"
+            stdout = "[SUCCESS] Machine alias updated to '$newAlias' successfully."
             stderr = ""
             completed_at = (Get-Date -Format "yyyy-MM-dd HH:mm:ss")
         } | ConvertTo-Json -Compress
@@ -564,12 +564,12 @@ function Execute-RemoteJob {
         return
     }
 
-    # ตรวจสอบคำสั่งที่มีความเสี่ยงสูง
+    # 
     if ($command -match "(?i)drop\s+database" -or $command -match "(?i)truncate\s+table") {
         Write-Host " -> [SECURITY WARNING] High-risk command detected (DROP DATABASE / TRUNCATE TABLE)" -ForegroundColor Yellow
     }
 
-    # ปรับสถานะเป็น Running
+    # Running
     Write-Host " -> Updating job status: Running (Timeout: ${timeoutSec}s)..." -ForegroundColor Yellow
     $timestamp = Get-Date -Format "yyyy-MM-dd HH:mm:ss"
     $runBody = '{"status":"running","last_heartbeat":"' + $timestamp + '","progress_phase":"Executing command...","abort":false}'
@@ -582,7 +582,7 @@ function Execute-RemoteJob {
     $isAborted = $false
     $isTimedOut = $false
 
-    # ตรวจสอบ Execution Engine Mode (ค่าเริ่มต้นเป็น turbo: In-Memory Runspace <10ms, หรือ fallback เป็น isolated: Process)
+    # Execution Engine Mode ( turbo: In-Memory Runspace <10ms,  fallback  isolated: Process)
     $execMode = "turbo"
     if ($JobDetails.execution_mode -and $JobDetails.execution_mode.ToString().ToLower() -eq "isolated") {
         $execMode = "isolated"
@@ -613,7 +613,7 @@ function Execute-RemoteJob {
         while (-not $asyncResult.IsCompleted) {
             Start-Sleep -Milliseconds 25
 
-            # รวบรวม Output จาก Output Collection
+            # Output  Output Collection
             while ($outIdx -lt $outputCol.Count) {
                 $item = $outputCol[$outIdx]
                 if ($item -ne $null) {
@@ -626,7 +626,7 @@ function Execute-RemoteJob {
                 $outIdx++
             }
 
-            # รวบรวมข้อความ Write-Host จาก Information Stream
+            # Write-Host  Information Stream
             while ($infoIdx -lt $ps.Streams.Information.Count) {
                 $info = $ps.Streams.Information[$infoIdx]
                 if ($info -ne $null -and $info.MessageData -ne $null) {
@@ -639,7 +639,7 @@ function Execute-RemoteJob {
                 $infoIdx++
             }
 
-            # รวบรวมข้อความ Warning Stream
+            # Warning Stream
             while ($warnIdx -lt $ps.Streams.Warning.Count) {
                 $warn = $ps.Streams.Warning[$warnIdx]
                 if ($warn -ne $null) {
@@ -652,7 +652,7 @@ function Execute-RemoteJob {
                 $warnIdx++
             }
 
-            # รวบรวมข้อความ Error Stream
+            # Error Stream
             while ($errIdx -lt $ps.Streams.Error.Count) {
                 $err = $ps.Streams.Error[$errIdx]
                 if ($err -ne $null) {
@@ -667,7 +667,7 @@ function Execute-RemoteJob {
 
             $now = [DateTime]::UtcNow
 
-            # ตรวจสอบสัญญาณฉุกเฉิน Abort จาก Cloud ทุก 500ms
+            # Abort  Cloud  500ms
             if (($now - $lastAbortCheckTime).TotalMilliseconds -ge 500) {
                 $lastAbortCheckTime = $now
                 try {
@@ -682,7 +682,7 @@ function Execute-RemoteJob {
                 } catch {}
             }
 
-            # ตรวจสอบ Hard Timeout
+            # Hard Timeout
             if (($now - $startTime).TotalSeconds -ge $timeoutSec) {
                 Write-Host "`n -> [TIMEOUT] Execution exceeded Hard Timeout (${timeoutSec}s)!" -ForegroundColor Red
                 $isTimedOut = $true
@@ -690,7 +690,7 @@ function Execute-RemoteJob {
                 break
             }
 
-            # สตรีมผลลัพธ์ย่อยและ Heartbeat กลับ Firebase ทุก 1.5 วินาที
+            # Heartbeat  Firebase  1.5
             if (($now - $lastStreamingTime).TotalSeconds -ge 1.5) {
                 $lastStreamingTime = $now
                 $timestamp = Get-Date -Format "yyyy-MM-dd HH:mm:ss"
@@ -706,14 +706,14 @@ function Execute-RemoteJob {
             }
         }
 
-        # สิ้นสุดการประมวลผล In-Memory Runspace
+        # In-Memory Runspace
         try {
             [void]$ps.EndInvoke($asyncResult)
         } catch {
             $stderrCollector.Add("Execution exception: " + $_.ToString())
         }
 
-        # เคลียร์ข้อมูลคงค้างจากทุกสตรีม
+        # 
         while ($outIdx -lt $outputCol.Count) {
             $item = $outputCol[$outIdx]
             if ($item -ne $null) {
@@ -759,7 +759,7 @@ function Execute-RemoteJob {
             $errIdx++
         }
 
-        # คำนวณ Exit Code
+        # Exit Code
         if ($ps.InvocationStateInfo.State -eq [System.Management.Automation.PSInvocationState]::Failed) {
             $exitCode = 1
         } else {
@@ -859,7 +859,7 @@ function Execute-RemoteJob {
         }
     }
 
-    # ประเมินสถานะสุดท้าย
+    # 
     $finalStatus = "completed"
     if ($isAborted) {
         $finalStatus = "cancelled"
@@ -906,7 +906,7 @@ try {
             Write-Host " (MAINTAINED)" -ForegroundColor Yellow
             Write-Host "  -> State Reset       : Clearing Sockets, Cache & In-Memory Engine" -ForegroundColor Cyan
             
-            # ทำความสะอาดไฟล์ชั่วคราวและหน่วยความจำ
+            # 
             Get-ChildItem -Path $env:TEMP -Filter "remote_script_*.ps1" -ErrorAction SilentlyContinue | Remove-Item -Force -ErrorAction SilentlyContinue
             Get-ChildItem -Path $env:TEMP -Filter "agent_*_temp.json" -ErrorAction SilentlyContinue | Remove-Item -Force -ErrorAction SilentlyContinue
             try {
@@ -914,7 +914,7 @@ try {
                 [GC]::WaitForPendingFinalizers()
             } catch {}
             
-            # ยืนยัน Claim บน Cloud Command Board อีกครั้ง
+            # Claim  Cloud Command Board
             try {
                 $claimUrl = $BaseUrl + "jobs/$SecretKey/claim.json"
                 $claimBody = '{"claimed_at":"' + (Get-Date -Format "yyyy-MM-dd HH:mm:ss") + '","status":"active","engine":"realtime_sse","tenant":"' + $displayTenant + '","restarted_at":"' + (Get-Date -Format "yyyy-MM-dd HH:mm:ss") + '"}'
@@ -957,7 +957,7 @@ try {
                 $line = $reader.ReadLine()
                 if ($null -eq $line) { break }
 
-                # ตรวจสอบส่ง Heartbeat สม่ำเสมอทุกๆ 28-30 วินาที
+                # Heartbeat  28-30
                 if (([DateTime]::UtcNow - $script:LastHeartbeatUtc).TotalSeconds -ge 28) {
                     Update-DeviceHeartbeat -Status "online"
                 }
@@ -975,18 +975,18 @@ try {
                                 if ($eventObj) {
                                     $payload = if ($eventObj.data) { $eventObj.data } else { $eventObj }
                                     
-                                    # ค้นหา Job ที่สถานะ pending
+                                    # Job  pending
                                     $targetJobId = $null
                                     $targetJobDetails = $null
 
                                     if ($payload -is [System.Management.Automation.PSCustomObject]) {
-                                        # กรณีเป็น Job เดียวส่งมาตรงๆ
+                                        # Job
                                         if ($payload.status -eq "pending" -and $payload.script_content) {
                                             $path = if ($eventObj.path) { $eventObj.path.TrimStart('/') } else { "" }
                                             $targetJobId = if ($path) { $path } else { "job-" + [Guid]::NewGuid().ToString().Substring(0, 8) }
                                             $targetJobDetails = $payload
                                         } else {
-                                            # กรณีเป็นชุด Object ของ Jobs
+                                            # Object  Jobs
                                             foreach ($prop in $payload.PSObject.Properties) {
                                                 if ($prop.Value -and $prop.Value.status -eq "pending") {
                                                     $targetJobId = $prop.Name
@@ -1029,7 +1029,7 @@ try {
             if (([DateTime]::UtcNow - $script:LastHeartbeatUtc).TotalSeconds -ge 28) {
                 Update-DeviceHeartbeat -Status "online"
             }
-            # หาก SSE หลุด หรือมีข้อจำกัดด้านเน็ตเวิร์ก ให้สลับมาใช้ Adaptive Fast Polling ชั่วคราว
+            # SSE    Adaptive Fast Polling
             try {
                 $queryUrl = $BaseUrl + "jobs/$SecretKey.json"
                 $jsonRaw = Invoke-FirebaseHttp -Uri $queryUrl -Method "GET" -TimeoutSec 5
