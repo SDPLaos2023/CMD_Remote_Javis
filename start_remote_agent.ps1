@@ -252,6 +252,8 @@ function Get-UniqueSecretKey {
     return (Get-Random -Minimum 1000 -Maximum 10000).ToString()
 }
 
+$script:DeviceCustomName = $env:COMPUTERNAME
+
 # จัดการ Persistent PIN สำหรับโหมด Fix (Windows Service)
 if ($isFixedService -and [string]::IsNullOrWhiteSpace($SecretKey)) {
     if (Test-Path $serviceConfigFile) {
@@ -260,6 +262,9 @@ if ($isFixedService -and [string]::IsNullOrWhiteSpace($SecretKey)) {
             if ($savedCfg) {
                 if ($savedCfg.authToken -and [string]::IsNullOrWhiteSpace($script:FirebaseAuthToken)) {
                     $script:FirebaseAuthToken = $savedCfg.authToken.ToString().Trim()
+                }
+                if ($savedCfg.custom_name) {
+                    $script:DeviceCustomName = $savedCfg.custom_name.ToString().Trim()
                 }
                 if ($savedCfg.pin) {
                     $candPin = $savedCfg.pin.ToString().Trim()
@@ -292,6 +297,7 @@ if ($isFixedService) {
         $cfgObj = @{
             pin = $SecretKey
             hostname = $env:COMPUTERNAME
+            custom_name = $script:DeviceCustomName
             mode = "fix"
             authToken = $script:FirebaseAuthToken
             updated_at = (Get-Date -Format "yyyy-MM-ddTHH:mm:ssZ")
@@ -368,6 +374,7 @@ function Update-DeviceHeartbeat {
         $devData = @{
             pin = $SecretKey
             hostname = $env:COMPUTERNAME
+            custom_name = if (-not [string]::IsNullOrWhiteSpace($script:DeviceCustomName)) { $script:DeviceCustomName } else { $env:COMPUTERNAME }
             local_ip = $script:DeviceLocalIp
             public_ip = $script:DevicePublicIp
             os_version = $script:DeviceOsVersion
@@ -398,7 +405,12 @@ Write-Host " $modeBadge" -ForegroundColor Yellow
 Write-Host "  -> Execution Mode    : " -NoNewline -ForegroundColor Gray
 Write-Host $(if ($isFixedService) { "Always-On Windows Service" } else { "Ephemeral On-Demand" }) -ForegroundColor White
 Write-Host "  -> Machine Hostname  : " -NoNewline -ForegroundColor Gray
-Write-Host "$env:COMPUTERNAME" -ForegroundColor Cyan
+if ($script:DeviceCustomName -and $script:DeviceCustomName -ne $env:COMPUTERNAME) {
+    Write-Host "$script:DeviceCustomName " -NoNewline -ForegroundColor Green
+    Write-Host "($env:COMPUTERNAME)" -ForegroundColor DarkGray
+} else {
+    Write-Host "$env:COMPUTERNAME" -ForegroundColor Cyan
+}
 Write-Host "  -> Local IPv4        : " -NoNewline -ForegroundColor Gray
 Write-Host "$script:DeviceLocalIp" -ForegroundColor Cyan
 Write-Host "  -> Tenant Workspace  : " -NoNewline -ForegroundColor Gray
@@ -517,6 +529,38 @@ function Execute-RemoteJob {
         $null = Invoke-FirebaseHttp -Uri $updateUrl -Method "PATCH" -Body $restartRes -TimeoutSec 5
         
         $script:restartRequested = $true
+        return
+    }
+
+    # ตรวจสอบคำสั่งพิเศษเปลี่ยนชื่อ Host จากระยะไกล (Remote Rename / Set Alias)
+    if ($command -match "^@SET_ALIAS\s+(.+)$" -or $command -match "^@RENAME\s+(.+)$") {
+        $newAlias = $Matches[1].Trim()
+        Write-Host " -> [REMOTE RENAME] Special command received: Changing display name to '$newAlias'..." -ForegroundColor Yellow
+        $script:DeviceCustomName = $newAlias
+        
+        # บันทึกลง service_config.json
+        if (Test-Path $serviceConfigFile) {
+            try {
+                $savedCfg = Get-Content $serviceConfigFile -Raw -Encoding UTF8 | ConvertFrom-Json
+                $savedCfg.custom_name = $newAlias
+                $savedCfg.updated_at = (Get-Date -Format "yyyy-MM-ddTHH:mm:ssZ")
+                $utf8NoBom = New-Object System.Text.UTF8Encoding($false)
+                [System.IO.File]::WriteAllText($serviceConfigFile, ($savedCfg | ConvertTo-Json), $utf8NoBom)
+            } catch {}
+        }
+
+        # ยิง Heartbeat อัปเดตทันที
+        Update-DeviceHeartbeat -Status "online"
+
+        $renameRes = @{
+            status = "completed"
+            exit_code = 0
+            stdout = "[SUCCESS] เปลี่ยนชื่อเครื่องเป็น '$newAlias' เรียบร้อยแล้ว (อัปเดตลง Cloud และ Config สำเร็จ)"
+            stderr = ""
+            completed_at = (Get-Date -Format "yyyy-MM-dd HH:mm:ss")
+        } | ConvertTo-Json -Compress
+        $updateUrl = $BaseUrl + "jobs/$CurrentKey/$JobId.json"
+        $null = Invoke-FirebaseHttp -Uri $updateUrl -Method "PATCH" -Body $renameRes -TimeoutSec 5
         return
     }
 

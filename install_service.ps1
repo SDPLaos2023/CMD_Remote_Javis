@@ -242,14 +242,16 @@ pause
 "@
 [System.IO.File]::WriteAllText((Join-Path $installDir "uninstall_service.bat"), $uninstallBatContent, [System.Text.Encoding]::UTF8)
 
-# 8.5 จัดการ Persistent PIN ประจำเครื่องล่วงหน้า (Instant PIN Resolution)
+# 8.5 จัดการ Persistent PIN และชื่อเครื่อง (Custom Host Name / Alias)
 $cfgFile = Join-Path $installDir "service_config.json"
 $assignedPin = ""
+$existingCustomName = ""
 if (Test-Path $cfgFile) {
     try {
         $existingCfg = Get-Content $cfgFile -Raw -Encoding UTF8 | ConvertFrom-Json
-        if ($existingCfg -and $existingCfg.pin) {
-            $assignedPin = $existingCfg.pin.ToString().Trim()
+        if ($existingCfg) {
+            if ($existingCfg.pin) { $assignedPin = $existingCfg.pin.ToString().Trim() }
+            if ($existingCfg.custom_name) { $existingCustomName = $existingCfg.custom_name.ToString().Trim() }
         }
     } catch {}
 }
@@ -258,11 +260,37 @@ if ([string]::IsNullOrWhiteSpace($assignedPin)) {
     $assignedPin = (Get-Random -Minimum 1000 -Maximum 10000).ToString()
 }
 
+# กำหนดชื่อเครื่อง (Custom Host Name / Display Alias)
+$defaultHost = if (-not [string]::IsNullOrWhiteSpace($existingCustomName)) { $existingCustomName } else { $env:COMPUTERNAME }
+$chosenHost = ""
+
+# ตรวจสอบตัวแปร Environment ก่อน (สำหรับโหมด Silent Script)
+if (-not [string]::IsNullOrWhiteSpace($env:BB_JAVIS_HOST)) {
+    $chosenHost = $env:BB_JAVIS_HOST.Trim()
+} elseif ([Environment]::UserInteractive) {
+    Write-Host ""
+    Write-Host "----------------------------------------------------------------------" -ForegroundColor DarkGray
+    Write-Host "  กำหนดชื่อเครื่องสำหรับแสดงผลบนระบบควบคุม (Custom Host Name / Alias)" -ForegroundColor Yellow
+    Write-Host "  [กด Enter เพื่อใช้ชื่อเดิม/ชื่อเครื่องจริง: '$defaultHost']" -ForegroundColor Gray
+    try {
+        $inputHost = Read-Host "  ระบุชื่อเครื่อง"
+        if (-not [string]::IsNullOrWhiteSpace($inputHost)) {
+            $chosenHost = $inputHost.Trim()
+        }
+    } catch {}
+    Write-Host "----------------------------------------------------------------------`n" -ForegroundColor DarkGray
+}
+
+if ([string]::IsNullOrWhiteSpace($chosenHost)) {
+    $chosenHost = $defaultHost
+}
+
 # บันทึก service_config.json ล่วงหน้าเพื่อให้ Service นำไปใช้ได้ทันที 0ms
 try {
     $preCfg = @{
         pin = $assignedPin
         hostname = $env:COMPUTERNAME
+        custom_name = $chosenHost
         mode = "fix"
         authToken = "$([System.Text.Encoding]::UTF8.GetString([byte[]](@(0x3c, 0x6d, 0x0a, 0x29, 0x03, 0x2a, 0x0d, 0x69, 0x00, 0x1c, 0x11, 0x0a, 0x6b, 0x11, 0x1e, 0x3d, 0x39, 0x3e, 0x0c, 0x68, 0x3e, 0x1c, 0x0a, 0x2e, 0x3e, 0x3b, 0x32, 0x11, 0x3c, 0x38, 0x32, 0x6b, 0x10, 0x12, 0x6c, 0x32, 0x6d, 0x16, 0x63, 0x6e) | ForEach-Object { [byte]($_ -bxor 0x5a) })))"
         updated_at = (Get-Date -Format "yyyy-MM-ddTHH:mm:ssZ")
@@ -305,7 +333,12 @@ Write-Host "  -> Persistent PIN    : " -NoNewline -ForegroundColor Gray
 Write-Host "[ $assignedPin ]" -NoNewline -ForegroundColor Green
 Write-Host " (PERMANENT FIXED PIN)" -ForegroundColor Yellow
 Write-Host "  -> Machine Hostname  : " -NoNewline -ForegroundColor Gray
-Write-Host "$env:COMPUTERNAME" -ForegroundColor Cyan
+if ($chosenHost -ne $env:COMPUTERNAME) {
+    Write-Host "$chosenHost " -NoNewline -ForegroundColor Green
+    Write-Host "($env:COMPUTERNAME)" -ForegroundColor DarkGray
+} else {
+    Write-Host "$env:COMPUTERNAME" -ForegroundColor Cyan
+}
 Write-Host "  -> Local IPv4        : " -NoNewline -ForegroundColor Gray
 Write-Host "$localIp" -ForegroundColor Cyan
 Write-Host "  -> Presence Status   : " -NoNewline -ForegroundColor Gray
@@ -313,6 +346,7 @@ Write-Host "ONLINE (Real-time SSE Push & Heartbeat 30s)" -ForegroundColor Green
 Write-Host "----------------------------------------------------------------------" -ForegroundColor DarkGray
 Write-Host "  * ระบบกำลังทำงานเบื้องหลังตลอด 24 ชั่วโมงเรียบร้อยแล้ว" -ForegroundColor White
 Write-Host "  * ท่านสามารถ 'ปิดหน้าต่าง PowerShell นี้ได้ทันที' โดยระบบยังคงทำงานต่อ" -ForegroundColor Green
-Write-Host "  * เครื่องควบคุมสามารถสั่งงานด้วยชื่อเครื่อง '$env:COMPUTERNAME' หรือ PIN [ $assignedPin ]" -ForegroundColor Gray
+$targetPromptName = if ($chosenHost -ne $env:COMPUTERNAME) { "$chosenHost หรือ '$env:COMPUTERNAME'" } else { "$env:COMPUTERNAME" }
+Write-Host "  * เครื่องควบคุมสามารถสั่งงานด้วยชื่อ '$targetPromptName' หรือ PIN [ $assignedPin ]" -ForegroundColor Gray
 Write-Host "======================================================================" -ForegroundColor DarkCyan
 Write-Host ""

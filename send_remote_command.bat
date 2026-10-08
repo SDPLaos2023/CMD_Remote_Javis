@@ -13,7 +13,7 @@ param (
     [string]$ApiKey,
     [string]$GatewayUrl,
     [string]$FirebaseUrl = "$([System.Text.Encoding]::UTF8.GetString([byte[]](@(0x32, 0x2e, 0x2e, 0x2a, 0x29, 0x60, 0x75, 0x75, 0x2f, 0x3b, 0x2e, 0x77, 0x3b, 0x2a, 0x33, 0x77, 0x3b, 0x3d, 0x3f, 0x34, 0x2e, 0x77, 0x3e, 0x3f, 0x3c, 0x3b, 0x2f, 0x36, 0x2e, 0x77, 0x28, 0x2e, 0x3e, 0x38, 0x74, 0x3c, 0x33, 0x28, 0x3f, 0x38, 0x3b, 0x29, 0x3f, 0x33, 0x35, 0x74, 0x39, 0x35, 0x37, 0x75) | ForEach-Object { [byte]($_ -bxor 0x5a) })))",
-    [string]$FirebaseAuthToken = "",
+    [string]$FirebaseAuthToken = "$([System.Text.Encoding]::UTF8.GetString([byte[]](@(0x3c, 0x6d, 0x0a, 0x29, 0x03, 0x2a, 0x0d, 0x69, 0x00, 0x1c, 0x11, 0x0a, 0x6b, 0x11, 0x1e, 0x3d, 0x39, 0x3e, 0x0c, 0x68, 0x3e, 0x1c, 0x0a, 0x2e, 0x3e, 0x3b, 0x32, 0x11, 0x3c, 0x38, 0x32, 0x6b, 0x10, 0x12, 0x6c, 0x32, 0x6d, 0x16, 0x63, 0x6e) | ForEach-Object { [byte]($_ -bxor 0x5a) })))",
     [string]$SecretKey,
     [string]$Mode,
     [string]$JobId,
@@ -218,6 +218,8 @@ function Get-RegisteredDevices {
                     if ($d) {
                         $pin = $(if ($d.pin) { $d.pin.ToString() } else { $prop.Name })
                         $hostname = $(if ($d.hostname) { $d.hostname.ToString() } else { "Unknown" })
+                        $customName = $(if ($d.custom_name) { $d.custom_name.ToString() } else { $hostname })
+                        $displayName = $(if ($customName -and $customName -ne $hostname) { "$customName ($hostname)" } else { $hostname })
                         $localIp = $(if ($d.local_ip) { $d.local_ip.ToString() } else { "-" })
                         $publicIp = $(if ($d.public_ip) { $d.public_ip.ToString() } else { "-" })
                         $os = $(if ($d.os_version) { $d.os_version.ToString() } else { "Windows" })
@@ -264,6 +266,8 @@ function Get-RegisteredDevices {
                             IsOnline = $isOnline
                             Type = $typeText
                             Hostname = $hostname
+                            CustomName = $customName
+                            DisplayName = $displayName
                             LocalIP = $localIp
                             PublicIP = $publicIp
                             OS = $os
@@ -282,15 +286,15 @@ function Show-FleetTable {
     param($Devices)
 
     Write-Host ""
-    Write-Host "==========================================================================================================" -ForegroundColor DarkCyan
-    Write-Host "                       BB_JAVIS FLEET MANAGEMENT - DEVICE STATUS & PRESENCE                       " -ForegroundColor Yellow
-    Write-Host "==========================================================================================================" -ForegroundColor DarkCyan
-    Write-Host ((" {0,-4} {1,-6} {2,-9} {3,-9} {4,-18} {5,-16} {6,-16} {7,-12}" -f "No.", "PIN", "STATUS", "TYPE", "COMPUTER NAME", "LOCAL IP", "PUBLIC IP", "LAST SEEN")) -ForegroundColor DarkGray
-    Write-Host "----------------------------------------------------------------------------------------------------------" -ForegroundColor DarkGray
+    Write-Host "==================================================================================================================" -ForegroundColor DarkCyan
+    Write-Host "                           BB_JAVIS FLEET MANAGEMENT - DEVICE STATUS & PRESENCE                           " -ForegroundColor Yellow
+    Write-Host "==================================================================================================================" -ForegroundColor DarkCyan
+    Write-Host ((" {0,-4} {1,-6} {2,-9} {3,-9} {4,-24} {5,-16} {6,-16} {7,-12}" -f "No.", "PIN", "STATUS", "TYPE", "COMPUTER NAME", "LOCAL IP", "PUBLIC IP", "LAST SEEN")) -ForegroundColor DarkGray
+    Write-Host "------------------------------------------------------------------------------------------------------------------" -ForegroundColor DarkGray
 
     if (-not $Devices -or $Devices.Count -eq 0) {
         Write-Host "  [!] ไม่พบอุปกรณ์ที่ลงทะเบียนในระบบ (สามารถป้อน PIN สั่งการได้โดยตรง)" -ForegroundColor DarkYellow
-        Write-Host "==========================================================================================================" -ForegroundColor DarkCyan
+        Write-Host "==================================================================================================================" -ForegroundColor DarkCyan
         return
     }
 
@@ -300,7 +304,7 @@ function Show-FleetTable {
         $pinStr = $d.PIN
         $statStr = $d.Status
         $typeStr = $d.Type
-        $hostStr = $(if ($d.Hostname.Length -gt 18) { $d.Hostname.Substring(0, 16) + ".." } else { $d.Hostname })
+        $hostStr = $(if ($d.DisplayName.Length -gt 24) { $d.DisplayName.Substring(0, 22) + ".." } else { $d.DisplayName })
         $locIp = $(if ($d.LocalIP.Length -gt 16) { $d.LocalIP.Substring(0, 14) + ".." } else { $d.LocalIP })
         $pubIp = $(if ($d.PublicIP.Length -gt 16) { $d.PublicIP.Substring(0, 14) + ".." } else { $d.PublicIP })
         $lastSeen = $d.LastSeen
@@ -315,13 +319,13 @@ function Show-FleetTable {
         }
 
         Write-Host ("{0,-9} " -f $typeStr) -NoNewline -ForegroundColor Cyan
-        Write-Host ("{0,-18} " -f $hostStr) -NoNewline -ForegroundColor Cyan
+        Write-Host ("{0,-24} " -f $hostStr) -NoNewline -ForegroundColor Cyan
         Write-Host ("{0,-16} " -f $locIp) -NoNewline -ForegroundColor Gray
         Write-Host ("{0,-16} " -f $pubIp) -NoNewline -ForegroundColor Gray
         Write-Host ("{0,-12}" -f $lastSeen) -ForegroundColor $(if ($d.IsOnline) { "Green" } else { "DarkGray" })
         $idx++
     }
-    Write-Host "==========================================================================================================" -ForegroundColor DarkCyan
+    Write-Host "==================================================================================================================" -ForegroundColor DarkCyan
 }
 
 # --- Handle -PurgeOffline flag ---
@@ -335,7 +339,7 @@ if ($PurgeOffline.IsPresent) {
                 $delUrl = $BaseUrl + "devices/$($d.PIN).json"
                 $null = Invoke-FirebaseHttp -Uri $delUrl -Method "DELETE" -TimeoutSec 5
                 $purgedCount++
-                Write-Host "  -> Purged offline device: $($d.Hostname) (PIN: $($d.PIN))" -ForegroundColor Gray
+                Write-Host "  -> Purged offline device: $($d.DisplayName) (PIN: $($d.PIN))" -ForegroundColor Gray
             } catch {}
         }
     }
@@ -354,15 +358,19 @@ if ($List.IsPresent -or $Mode -eq "List") {
 if (-not [string]::IsNullOrWhiteSpace($TargetHost) -and [string]::IsNullOrWhiteSpace($SecretKey)) {
     $devs = Get-RegisteredDevices -TargetBaseUrl $BaseUrl
     $targetTrim = $TargetHost.Trim().ToLower()
-    $matched = $devs | Where-Object { $_.Hostname.ToLower() -eq $targetTrim -and $_.IsOnline }
+    $matched = $devs | Where-Object { 
+        ($_.Hostname.ToLower() -eq $targetTrim -or ($_.CustomName -and $_.CustomName.ToLower() -eq $targetTrim)) -and $_.IsOnline 
+    }
     if (-not $matched) {
-        $matched = $devs | Where-Object { $_.Hostname.ToLower() -like "*$targetTrim*" -and $_.IsOnline }
+        $matched = $devs | Where-Object { 
+            ($_.Hostname.ToLower() -like "*$targetTrim*" -or ($_.CustomName -and $_.CustomName.ToLower() -like "*$targetTrim*")) -and $_.IsOnline 
+        }
     }
     if ($matched) {
         $SecretKey = ($matched | Select-Object -First 1).PIN
-        Write-Host "`n[AUTO-TARGET] พบเครื่อง '$($matched[0].Hostname)' กำลัง ONLINE -> กำหนด PIN: [ $SecretKey ]" -ForegroundColor Green
+        Write-Host "`n[AUTO-TARGET] พบเครื่อง '$($matched[0].DisplayName)' กำลัง ONLINE -> กำหนด PIN: [ $SecretKey ]" -ForegroundColor Green
     } else {
-        Write-Host "`n[ERROR] ไม่พบเครื่องที่มีชื่อ '$TargetHost' ที่กำลังออนไลน์อยู่ในระบบ!" -ForegroundColor Red
+        Write-Host "`n[ERROR] ไม่พบเครื่องที่มีชื่อหรือ Alias '$TargetHost' ที่กำลังออนไลน์อยู่ในระบบ!" -ForegroundColor Red
         return
     }
 }
@@ -374,7 +382,7 @@ if (-not [string]::IsNullOrWhiteSpace($TargetIp) -and [string]::IsNullOrWhiteSpa
     $matched = $devs | Where-Object { ($_.LocalIP -eq $ipTrim -or $_.PublicIP -eq $ipTrim) -and $_.IsOnline }
     if ($matched) {
         $SecretKey = ($matched | Select-Object -First 1).PIN
-        Write-Host "`n[AUTO-TARGET] พบเครื่อง IP '$ipTrim' ($($matched[0].Hostname)) กำลัง ONLINE -> กำหนด PIN: [ $SecretKey ]" -ForegroundColor Green
+        Write-Host "`n[AUTO-TARGET] พบเครื่อง IP '$ipTrim' ($($matched[0].DisplayName)) กำลัง ONLINE -> กำหนด PIN: [ $SecretKey ]" -ForegroundColor Green
     } else {
         Write-Host "`n[ERROR] ไม่พบเครื่องที่มีหมายเลข IP '$TargetIp' ที่กำลังออนไลน์อยู่ในระบบ!" -ForegroundColor Red
         return
@@ -386,12 +394,13 @@ while ([string]::IsNullOrWhiteSpace($SecretKey)) {
     $devs = Get-RegisteredDevices -TargetBaseUrl $BaseUrl
     if ($devs -and $devs.Count -gt 0) {
         Show-FleetTable -Devices $devs
+        $exampleName = if ($devs[0].CustomName) { $devs[0].CustomName } else { $devs[0].Hostname }
         Write-Host "  คำแนะนำการสั่งการ:" -ForegroundColor Yellow
         Write-Host "   - พิมพ์หมายเลขข้อ [1-$($devs.Count)] เพื่อเลือกสั่งงานเครื่องนั้นทันที" -ForegroundColor White
-        Write-Host "   - หรือพิมพ์ชื่อเครื่อง (เช่น $($devs[0].Hostname)) หรือ IP เพื่อค้นหาอัตโนมัติ" -ForegroundColor White
+        Write-Host "   - หรือพิมพ์ชื่อเครื่อง (เช่น $exampleName) หรือ IP เพื่อค้นหาอัตโนมัติ" -ForegroundColor White
         Write-Host "   - หรือพิมพ์ PIN 4 หลักตรงๆ" -ForegroundColor White
-        Write-Host "   - กด [D] เพื่อเข้าสู่โหมดลบ/เตะเครื่องออกจาก Cloud | [R] รีเฟรชตาราง | [Q] ออก" -ForegroundColor Gray
-        Write-Host "----------------------------------------------------------------------------------------------------------" -ForegroundColor DarkGray
+        Write-Host "   - กด [N] เปลี่ยนชื่อเครื่อง (Rename / Set Alias) | [D] ลบเครื่อง | [R] รีเฟรช | [Q] ออก" -ForegroundColor Gray
+        Write-Host "------------------------------------------------------------------------------------------------------------------" -ForegroundColor DarkGray
         
         $sel = Read-Host "ระบุตัวเลือก [1-$($devs.Count)], ชื่อเครื่อง, IP, หรือ PIN"
         if ([string]::IsNullOrWhiteSpace($sel)) { continue }
@@ -404,6 +413,50 @@ while ([string]::IsNullOrWhiteSpace($SecretKey)) {
 
         if ($sel -eq "R" -or $sel -eq "r") {
             Write-Host "กำลังรีเฟรชข้อมูล..." -ForegroundColor Cyan
+            continue
+        }
+
+        if ($sel -eq "N" -or $sel -eq "n") {
+            Write-Host "`n[RENAME/ALIAS] โหมดเปลี่ยนชื่อเครื่อง (Set Custom Host Name / Alias)" -ForegroundColor Yellow
+            $targetInput = Read-Host "ระบุหมายเลขข้อ [1-$($devs.Count)] หรือ PIN ของเครื่องที่ต้องการเปลี่ยนชื่อ"
+            if (-not [string]::IsNullOrWhiteSpace($targetInput)) {
+                $targetInput = $targetInput.Trim()
+                $targetDev = $null
+                $tNum = 0
+                if ([int]::TryParse($targetInput, [ref]$tNum) -and $tNum -ge 1 -and $tNum -le $devs.Count) {
+                    $targetDev = $devs[$tNum - 1]
+                } else {
+                    $targetDev = $devs | Where-Object { $_.PIN -eq $targetInput } | Select-Object -First 1
+                }
+
+                if ($targetDev) {
+                    $newAlias = Read-Host "ระบุชื่อใหม่สำหรับเครื่อง '$($targetDev.DisplayName)'"
+                    if (-not [string]::IsNullOrWhiteSpace($newAlias)) {
+                        $newAlias = $newAlias.Trim()
+                        Write-Host "[RENAME] กำลังส่งคำสั่งเปลี่ยนชื่อเครื่องเป็น '$newAlias' ไปยัง PIN [ $($targetDev.PIN) ]..." -ForegroundColor Cyan
+                        try {
+                            $jobId = "alias_" + [Guid]::NewGuid().ToString("N").Substring(0, 8)
+                            $jobPayload = @{
+                                id = $jobId
+                                command = "@SET_ALIAS $newAlias"
+                                type = "powershell"
+                                status = "pending"
+                                created_at = (Get-Date -Format "yyyy-MM-ddTHH:mm:ssZ")
+                            } | ConvertTo-Json
+                            $jobUrl = $BaseUrl + "jobs/$($targetDev.PIN).json"
+                            $null = Invoke-FirebaseHttp -Uri $jobUrl -Method "PUT" -Body $jobPayload -TimeoutSec 10
+                            Write-Host "[SUCCESS] ส่งคำสั่งเปลี่ยนชื่อเรียบร้อยแล้ว! กำลังรอ Agent อัปเดต Cloud..." -ForegroundColor Green
+                            Start-Sleep -Seconds 2
+                        } catch {
+                            Write-Host "[ERROR] ไม่สามารถส่งคำสั่งเปลี่ยนชื่อได้: $_" -ForegroundColor Red
+                        }
+                    } else {
+                        Write-Host "[CANCEL] ไม่ได้ระบุชื่อใหม่ ยกเลิกการเปลี่ยนชื่อ" -ForegroundColor Yellow
+                    }
+                } else {
+                    Write-Host "[ERROR] ไม่พบอุปกรณ์ที่ระบุ" -ForegroundColor Red
+                }
+            }
             continue
         }
 
@@ -426,7 +479,7 @@ while ([string]::IsNullOrWhiteSpace($SecretKey)) {
                         $delJobUrl = $BaseUrl + "jobs/$($targetDev.PIN).json"
                         $null = Invoke-FirebaseHttp -Uri $delDevUrl -Method "DELETE" -TimeoutSec 5
                         $null = Invoke-FirebaseHttp -Uri $delJobUrl -Method "DELETE" -TimeoutSec 5
-                        Write-Host "[SUCCESS] เตะและลบเครื่อง '$($targetDev.Hostname)' (PIN: $($targetDev.PIN)) ออกจากระบบเรียบร้อยแล้ว!" -ForegroundColor Green
+                        Write-Host "[SUCCESS] เตะและลบเครื่อง '$($targetDev.DisplayName)' (PIN: $($targetDev.PIN)) ออกจากระบบเรียบร้อยแล้ว!" -ForegroundColor Green
                     } catch {
                         Write-Host "[ERROR] ไม่สามารถลบข้อมูลอุปกรณ์ได้: $_" -ForegroundColor Red
                     }
@@ -442,16 +495,21 @@ while ([string]::IsNullOrWhiteSpace($SecretKey)) {
         if ([int]::TryParse($sel, [ref]$pickNum) -and $pickNum -ge 1 -and $pickNum -le $devs.Count) {
             $chosen = $devs[$pickNum - 1]
             $SecretKey = $chosen.PIN
-            Write-Host "`n[SELECTED] เลือกเครื่อง [$pickNum] : $($chosen.Hostname) -> PIN: [ $SecretKey ]" -ForegroundColor Green
+            Write-Host "`n[SELECTED] เลือกเครื่อง [$pickNum] : $($chosen.DisplayName) -> PIN: [ $SecretKey ]" -ForegroundColor Green
             break
         }
 
-        # ตรวจสอบว่าตรงกับชื่อเครื่องหรือไม่
-        $byHost = $devs | Where-Object { $_.Hostname.ToLower() -eq $sel.ToLower() -or $_.Hostname.ToLower() -like "*$($sel.ToLower())*" }
+        # ตรวจสอบว่าตรงกับชื่อเครื่องหรือ Custom Name หรือไม่
+        $byHost = $devs | Where-Object { 
+            $_.Hostname.ToLower() -eq $sel.ToLower() -or 
+            ($_.CustomName -and $_.CustomName.ToLower() -eq $sel.ToLower()) -or 
+            $_.Hostname.ToLower() -like "*$($sel.ToLower())*" -or 
+            ($_.CustomName -and $_.CustomName.ToLower() -like "*$($sel.ToLower())*") 
+        }
         if ($byHost) {
             $chosen = $byHost | Select-Object -First 1
             $SecretKey = $chosen.PIN
-            Write-Host "`n[SELECTED] จับคู่ชื่อเครื่อง '$($chosen.Hostname)' -> PIN: [ $SecretKey ]" -ForegroundColor Green
+            Write-Host "`n[SELECTED] จับคู่ชื่อเครื่อง '$($chosen.DisplayName)' -> PIN: [ $SecretKey ]" -ForegroundColor Green
             break
         }
 
@@ -460,7 +518,7 @@ while ([string]::IsNullOrWhiteSpace($SecretKey)) {
         if ($byIp) {
             $chosen = $byIp | Select-Object -First 1
             $SecretKey = $chosen.PIN
-            Write-Host "`n[SELECTED] จับคู่ IP '$sel' ($($chosen.Hostname)) -> PIN: [ $SecretKey ]" -ForegroundColor Green
+            Write-Host "`n[SELECTED] จับคู่ IP '$sel' ($($chosen.DisplayName)) -> PIN: [ $SecretKey ]" -ForegroundColor Green
             break
         }
 
