@@ -752,11 +752,28 @@ namespace BBJavisTunnel
 
         static async Task HandleProxyClient(TcpClient localTcp, string wssUrl, string token)
         {
-            ClientWebSocket ws = new ClientWebSocket();
-            ws.Options.SetRequestHeader("Authorization", "Bearer " + token);
+            ClientWebSocket ws = null;
             try
             {
-                await ws.ConnectAsync(new Uri(wssUrl), CancellationToken.None);
+                Exception lastEx = null;
+                for (int attempt = 0; attempt < 4; attempt++)
+                {
+                    ClientWebSocket candidate = new ClientWebSocket();
+                    candidate.Options.SetRequestHeader("Authorization", "Bearer " + token);
+                    try
+                    {
+                        await candidate.ConnectAsync(new Uri(wssUrl), CancellationToken.None);
+                        ws = candidate;
+                        break;
+                    }
+                    catch (Exception ex)
+                    {
+                        lastEx = ex;
+                        try { candidate.Dispose(); } catch {}
+                    }
+                    if (attempt < 3) await Task.Delay(500);
+                }
+                if (ws == null) throw (lastEx ?? new Exception("Failed to connect WebSocket tunnel."));
                 NetworkStream tcpStream = localTcp.GetStream();
 
                 Task t1 = Task.Run(async () =>
@@ -800,7 +817,7 @@ namespace BBJavisTunnel
             catch {}
             finally
             {
-                try { ws.Dispose(); } catch {}
+                try { if (ws != null) ws.Dispose(); } catch {}
                 try { localTcp.Close(); } catch {}
             }
         }
@@ -1369,44 +1386,60 @@ function Start-JavisOnDemandTunnel {
     $cfProc = Start-Process -FilePath $cfExe -ArgumentList "tunnel --no-autoupdate --url http://127.0.0.1:$wsPort" -RedirectStandardError $cfErrLog -WindowStyle Hidden -PassThru
 
     $tunnelUrl = ""
-    $deadline = [DateTime]::UtcNow.AddSeconds(20)
+    $tunnelRegistered = $false
+    $urlFoundAt = [DateTime]::MaxValue
+    $deadline = [DateTime]::UtcNow.AddSeconds(25)
     while ([DateTime]::UtcNow -lt $deadline) {
         Start-Sleep -Milliseconds 300
         if (Test-Path $cfErrLog) {
             $logTxt = Get-Content $cfErrLog -Raw -ErrorAction SilentlyContinue
-            if ($logTxt -match "(https://[a-z0-9-]+\.trycloudflare\.com)") {
+            if (-not $tunnelUrl -and $logTxt -match "(https://[a-z0-9-]+\.trycloudflare\.com)") {
                 $tunnelUrl = $Matches[1]
+                $urlFoundAt = [DateTime]::UtcNow
+            }
+            if ($tunnelUrl -and $logTxt -match "Registered tunnel connection") {
+                $tunnelRegistered = $true
+                break
+            }
+            if ($tunnelUrl -and ([DateTime]::UtcNow - $urlFoundAt).TotalSeconds -ge 4) {
                 break
             }
         }
     }
+    if ($tunnelRegistered) { Start-Sleep -Milliseconds 800 }
     Remove-Item $cfErrLog -Force -ErrorAction SilentlyContinue
 
     if ([string]::IsNullOrWhiteSpace($tunnelUrl)) {
         try { Stop-Process -Id $cfProc.Id -Force -ErrorAction SilentlyContinue } catch {}
         try { Stop-Process -Id $wsProc.Id -Force -ErrorAction SilentlyContinue } catch {}
-        throw "cloudflared quick tunnel did not emit a trycloudflare.com URL within 20s."
+        throw "cloudflared quick tunnel did not emit a trycloudflare.com URL within 25s."
     }
 
     $tempUser = ""
     $tempPass = ""
     $dbConn = ""
     if ($Payload.ephemeral_ro_sql) {
-        $dbConn = Get-JavisDbConnectionString -ProfileName $Payload.db_profile -OverrideConn $Payload.connection_string
-        $tempUser = "javis_ro_" + [Guid]::NewGuid().ToString("N").Substring(0, 8)
-        $pBytes = New-JavisRandomBytes -Length 18
-        $tempPass = [Convert]::ToBase64String($pBytes) + "!a1"
-        $pEsc = $tempPass.Replace("'", "''")
-        $uEsc = $tempUser.Replace("]", "]]")
-        $sqlConn = New-Object System.Data.SqlClient.SqlConnection($dbConn)
         try {
-            $sqlConn.Open()
-            $cmd = $sqlConn.CreateCommand()
-            $cmd.CommandText = "CREATE LOGIN [$uEsc] WITH PASSWORD = N'$pEsc', CHECK_POLICY = OFF; CREATE USER [$uEsc] FOR LOGIN [$uEsc]; ALTER ROLE [db_datareader] ADD MEMBER [$uEsc];"
-            $null = $cmd.ExecuteNonQuery()
-        } finally {
-            if ($sqlConn.State -eq "Open") { $sqlConn.Close() }
-            $sqlConn.Dispose()
+            $dbConn = Get-JavisDbConnectionString -ProfileName $Payload.db_profile -OverrideConn $Payload.connection_string
+            $tempUser = "javis_ro_" + [Guid]::NewGuid().ToString("N").Substring(0, 8)
+            $pBytes = New-JavisRandomBytes -Length 18
+            $tempPass = [Convert]::ToBase64String($pBytes) + "!a1"
+            $pEsc = $tempPass.Replace("'", "''")
+            $uEsc = $tempUser.Replace("]", "]]")
+            $sqlConn = New-Object System.Data.SqlClient.SqlConnection($dbConn)
+            try {
+                $sqlConn.Open()
+                $cmd = $sqlConn.CreateCommand()
+                $cmd.CommandText = "CREATE LOGIN [$uEsc] WITH PASSWORD = N'$pEsc', CHECK_POLICY = OFF; CREATE USER [$uEsc] FOR LOGIN [$uEsc]; ALTER ROLE [db_datareader] ADD MEMBER [$uEsc];"
+                $null = $cmd.ExecuteNonQuery()
+            } finally {
+                if ($sqlConn.State -eq "Open") { $sqlConn.Close() }
+                $sqlConn.Dispose()
+            }
+        } catch {
+            try { Stop-Process -Id $cfProc.Id -Force -ErrorAction SilentlyContinue } catch {}
+            try { Stop-Process -Id $wsProc.Id -Force -ErrorAction SilentlyContinue } catch {}
+            throw $_
         }
     }
 

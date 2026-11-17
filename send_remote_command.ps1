@@ -766,11 +766,28 @@ namespace BBJavisTunnel
 
         static async Task HandleProxyClient(TcpClient localTcp, string wssUrl, string token)
         {
-            ClientWebSocket ws = new ClientWebSocket();
-            ws.Options.SetRequestHeader("Authorization", "Bearer " + token);
+            ClientWebSocket ws = null;
             try
             {
-                await ws.ConnectAsync(new Uri(wssUrl), CancellationToken.None);
+                Exception lastEx = null;
+                for (int attempt = 0; attempt < 4; attempt++)
+                {
+                    ClientWebSocket candidate = new ClientWebSocket();
+                    candidate.Options.SetRequestHeader("Authorization", "Bearer " + token);
+                    try
+                    {
+                        await candidate.ConnectAsync(new Uri(wssUrl), CancellationToken.None);
+                        ws = candidate;
+                        break;
+                    }
+                    catch (Exception ex)
+                    {
+                        lastEx = ex;
+                        try { candidate.Dispose(); } catch {}
+                    }
+                    if (attempt < 3) await Task.Delay(500);
+                }
+                if (ws == null) throw (lastEx ?? new Exception("Failed to connect WebSocket tunnel."));
                 NetworkStream tcpStream = localTcp.GetStream();
 
                 Task t1 = Task.Run(async () =>
@@ -814,7 +831,7 @@ namespace BBJavisTunnel
             catch {}
             finally
             {
-                try { ws.Dispose(); } catch {}
+                try { if (ws != null) ws.Dispose(); } catch {}
                 try { localTcp.Close(); } catch {}
             }
         }
