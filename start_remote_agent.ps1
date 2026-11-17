@@ -1229,8 +1229,14 @@ if ($isFixedService) {
     }
 }
 
+function New-Javis4DigitPin {
+    $rb = New-JavisRandomBytes -Length 2
+    $val = ([uint16]$rb[0] -shl 8) -bor [uint16]$rb[1]
+    return (1000 + ($val % 9000)).ToString()
+}
+
 if ([string]::IsNullOrWhiteSpace($script:DeviceId)) {
-    $script:DeviceId = "dev-" + [Guid]::NewGuid().ToString("N").Substring(0, 12)
+    $script:DeviceId = New-Javis4DigitPin
 }
 if ([string]::IsNullOrWhiteSpace($script:DevicePrivXml)) {
     $kp = New-JavisRsaKeyPair
@@ -1259,44 +1265,48 @@ function Save-ServicePairingState {
     [System.IO.File]::WriteAllText($serviceConfigFile, $cfgObj, $utf8NoBom)
 }
 
-function New-PairingCode {
-    $chars = "ABCDEFGHJKLMNPQRSTUVWXYZ23456789"
-    $rb = New-JavisRandomBytes -Length 8
-    $sb = New-Object System.Text.StringBuilder
-    for ($i = 0; $i -lt 8; $i++) {
-        [void]$sb.Append($chars[$rb[$i] % $chars.Length])
-    }
-    return $sb.ToString()
-}
-
 function Invoke-DevicePairing {
-    $code = New-PairingCode
-    $reqBody = @{
-        device_id      = $script:DeviceId
-        pairing_code   = $code
-        hostname       = $env:COMPUTERNAME
-        custom_name    = $script:DeviceCustomName
-        device_pub_key = $script:DevicePubXml
-    } | ConvertTo-Json -Compress
+    $code = ""
+    $pairSecret = ""
+    for ($attempt = 0; $attempt -lt 10; $attempt++) {
+        if ($attempt -gt 0 -or $script:DeviceId -notmatch "^\d{4}$") {
+            $script:DeviceId = New-Javis4DigitPin
+        }
+        $code = $script:DeviceId
+        $reqBody = @{
+            device_id      = $script:DeviceId
+            pairing_code   = $code
+            hostname       = $env:COMPUTERNAME
+            custom_name    = $script:DeviceCustomName
+            device_pub_key = $script:DevicePubXml
+        } | ConvertTo-Json -Compress
 
-    $respRaw = Invoke-GatewayHttp -Uri ($BaseUrl + "pairing/request") -Method "POST" -Body $reqBody -TimeoutSec 15 -Key ""
-    $respObj = $respRaw | ConvertFrom-Json
-    if (-not $respObj -or -not $respObj.pairing_secret) {
+        $respRaw = Invoke-GatewayHttp -Uri ($BaseUrl + "pairing/request") -Method "POST" -Body $reqBody -TimeoutSec 15 -Key ""
+        $respObj = $respRaw | ConvertFrom-Json -ErrorAction SilentlyContinue
+        if ($respObj -and $respObj.error -eq "Conflict") {
+            $script:DeviceId = New-Javis4DigitPin
+            continue
+        }
+        if ($respObj -and $respObj.pairing_secret) {
+            $pairSecret = $respObj.pairing_secret
+            break
+        }
         throw "Failed to create pairing request: $respRaw"
     }
-    $pairSecret = $respObj.pairing_secret
+    if (-not $pairSecret) {
+        throw "Unable to reserve a unique 4-digit pairing PIN after 10 attempts."
+    }
 
     if ($isFixedService) {
-        [System.IO.File]::WriteAllText($pairingBannerFile, "PAIRING_CODE=$code`r`nDEVICE_ID=$($script:DeviceId)`r`nCREATED_UTC=$([DateTime]::UtcNow.ToString('o'))", $utf8NoBom)
+        [System.IO.File]::WriteAllText($pairingBannerFile, "PAIRING_PIN=$code`r`nDEVICE_ID=$($script:DeviceId)`r`nCREATED_UTC=$([DateTime]::UtcNow.ToString('o'))", $utf8NoBom)
     }
 
     Write-Host "======================================================================" -ForegroundColor DarkCyan
     Write-Host "             BB_JAVIS ZERO-TRUST DEVICE PAIRING REQUIRED              " -ForegroundColor Yellow
     Write-Host "======================================================================" -ForegroundColor DarkCyan
-    Write-Host "  -> Device ID    : $($script:DeviceId)" -ForegroundColor Cyan
-    Write-Host "  -> Machine Name : $($script:DeviceCustomName) ($env:COMPUTERNAME)" -ForegroundColor White
-    Write-Host "  -> Pairing Code : " -NoNewline -ForegroundColor Gray
+    Write-Host "  -> Remote PIN   : " -NoNewline -ForegroundColor Gray
     Write-Host "[ $code ]" -ForegroundColor Green
+    Write-Host "  -> Machine Name : $($script:DeviceCustomName) ($env:COMPUTERNAME)" -ForegroundColor White
     Write-Host "  -> Run on Dev   : send_remote_command.bat -Pair $code" -ForegroundColor Yellow
     Write-Host "======================================================================" -ForegroundColor DarkCyan
 
@@ -1306,16 +1316,18 @@ function Invoke-DevicePairing {
             $statusRaw = Invoke-GatewayHttp -Uri ($BaseUrl + "pairing/status/$code") -Method "GET" -TimeoutSec 10 -Key "" -ExtraHeaders @{ "X-Pairing-Secret" = $pairSecret }
             $statusObj = $statusRaw | ConvertFrom-Json
             if ($statusObj -and $statusObj.status -eq "claimed" -and $statusObj.device_token) {
+                if ($statusObj.device_id) { $script:DeviceId = $statusObj.device_id.ToString() }
                 $script:DeviceToken = $statusObj.device_token.ToString()
                 $script:TenantId = $statusObj.tenant.ToString()
                 $script:PairedAdmins[$statusObj.admin_id.ToString()] = $statusObj.admin_pub_key.ToString()
                 Save-ServicePairingState
                 if (Test-Path $pairingBannerFile) { Remove-Item $pairingBannerFile -Force -ErrorAction SilentlyContinue }
-                Write-Host "[PAIRED] Paired with admin '$($statusObj.admin_id)' (Tenant: $($script:TenantId))." -ForegroundColor Green
+                Write-Host "[PAIRED] Paired with admin '$($statusObj.admin_id)' -> Remote PIN: [ $($script:DeviceId) ] (Tenant: $($script:TenantId))." -ForegroundColor Green
                 break
             }
             if ($statusObj -and $statusObj.error -eq "Gone") {
-                Write-Host "[PAIRING] Pairing code expired. Generating a new code..." -ForegroundColor Yellow
+                Write-Host "[PAIRING] Pairing PIN expired. Generating a new 4-digit PIN..." -ForegroundColor Yellow
+                $script:DeviceId = New-Javis4DigitPin
                 Invoke-DevicePairing
                 return
             }
@@ -1724,7 +1736,7 @@ Update-DeviceHeartbeat -Status "online"
 Write-Host "======================================================================" -ForegroundColor DarkCyan
 Write-Host "         BB_JAVIS ZERO-TRUST REMOTE AGENT (E2E + TUNNEL READY)        " -ForegroundColor Yellow
 Write-Host "======================================================================" -ForegroundColor DarkCyan
-Write-Host "  -> Device ID  : $($script:DeviceId)" -ForegroundColor Green
+Write-Host "  -> Remote PIN : [ $($script:DeviceId) ]" -ForegroundColor Green
 Write-Host "  -> Host Alias : $($script:DeviceCustomName) ($env:COMPUTERNAME)" -ForegroundColor Cyan
 Write-Host "  -> Tenant     : $($script:TenantId)" -ForegroundColor White
 Write-Host "  -> Gateway    : $BaseUrl" -ForegroundColor Gray

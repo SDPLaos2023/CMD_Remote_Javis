@@ -1,7 +1,7 @@
 param (
     [string]$ApiKey = "",
     [string]$GatewayUrl = "",
-    [Alias("Pin")][string]$DeviceId = "",
+    [Alias("Pin","SecretKey")][string]$DeviceId = "",
     [string]$Pair = "",
     [string]$Mode = "",
     [string]$DbProfile = "Default",
@@ -1168,7 +1168,7 @@ if (-not [string]::IsNullOrWhiteSpace($Pair)) {
         paired_at      = [DateTime]::UtcNow.ToString("yyyy-MM-ddTHH:mm:ssZ")
     }
     Save-PairedDevicesMap -Map $map
-    Write-Host "[PAIRED] Claimed device '$($res.custom_name)' ($($res.device_id)) successfully." -ForegroundColor Green
+    Write-Host "[PAIRED] Claimed device '$($res.custom_name)' -> Remote PIN: [ $($res.device_id) ] successfully." -ForegroundColor Green
     return
 }
 
@@ -1230,7 +1230,7 @@ if ($PurgeOffline.IsPresent) {
 
 if ($List.IsPresent -or $Mode -eq "List") {
     $devs = Get-RegisteredDevices
-    $devs | Format-Table DeviceId, Status, DisplayName, LocalIP, AgeSec -AutoSize
+    $devs | Format-Table @{Label="PIN";Expression={$_.DeviceId}}, Status, DisplayName, LocalIP, AgeSec -AutoSize
     return
 }
 
@@ -1252,8 +1252,8 @@ if ([string]::IsNullOrWhiteSpace($DeviceId) -and -not [string]::IsNullOrWhiteSpa
 
 if ([string]::IsNullOrWhiteSpace($DeviceId)) {
     $devs = Get-RegisteredDevices
-    $devs | Format-Table DeviceId, Status, DisplayName, LocalIP, AgeSec -AutoSize
-    $DeviceId = (Read-Host "Enter target DeviceId").Trim()
+    $devs | Format-Table @{Label="PIN";Expression={$_.DeviceId}}, Status, DisplayName, LocalIP, AgeSec -AutoSize
+    $DeviceId = (Read-Host "Enter target 4-digit PIN (or DeviceId)").Trim()
 }
 
 if (-not $pairedMap.ContainsKey($DeviceId) -or -not $pairedMap[$DeviceId].device_pub_key) {
