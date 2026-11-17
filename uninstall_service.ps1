@@ -1,19 +1,15 @@
-# ======================================================================
-# BB_JAVIS Remote - Windows Service Automated Uninstaller (da.gd/bbj-unfix)
-# Automated Background Windows Service Uninstaller
-# ======================================================================
-
+$ErrorActionPreference = "SilentlyContinue"
 $OutputEncoding = [System.Text.Encoding]::UTF8
 [Console]::OutputEncoding = [System.Text.Encoding]::UTF8
 
-Write-Host "======================================================================" -ForegroundColor DarkCyan
-Write-Host "      BB_JAVIS REMOTE - SERVICE AUTOMATED UNINSTALLER (UNFIX)         " -ForegroundColor Yellow
-Write-Host "======================================================================" -ForegroundColor DarkCyan
+try {
+    [System.Net.ServicePointManager]::SecurityProtocol = 3072 -bor 768 -bor 192
+    Add-Type -AssemblyName System.Security -ErrorAction SilentlyContinue
+} catch {}
 
 $currentUser = [Security.Principal.WindowsPrincipal][Security.Principal.WindowsIdentity]::GetCurrent()
-$isAdmin = $currentUser.IsInRole([Security.Principal.WindowsBuiltInRole]::Administrator)
-if (-not $isAdmin) {
-    Write-Host "`n[ERROR] Elevated privileges required! Please run PowerShell as Administrator." -ForegroundColor Red
+if (-not $currentUser.IsInRole([Security.Principal.WindowsBuiltInRole]::Administrator)) {
+    Write-Host "[ERROR] Administrator privileges required." -ForegroundColor Red
     return
 }
 
@@ -21,68 +17,51 @@ $svcName = "BB_JAVIS_Remote"
 $installDir = "C:\ProgramData\BB_Javis"
 $cfgFile = Join-Path $installDir "service_config.json"
 
-# 1. Clean device and job records on Cloud
 if (Test-Path $cfgFile) {
     try {
         $cfg = Get-Content $cfgFile -Raw -Encoding UTF8 | ConvertFrom-Json
-        if ($cfg -and $cfg.pin) {
-            Write-Host "[CLOUD] Deregistering device PIN: $($cfg.pin) from Cloud..." -ForegroundColor Cyan
-            $authQuery = if ($cfg.authToken) { "?auth=$($cfg.authToken)" } else { "" }
-            $delDevUrl = "$([System.Text.Encoding]::UTF8.GetString([byte[]](@(0x32, 0x2e, 0x2e, 0x2a, 0x29, 0x60, 0x75, 0x75, 0x2f, 0x3b, 0x2e, 0x77, 0x3b, 0x2a, 0x33, 0x77, 0x3b, 0x3d, 0x3f, 0x34, 0x2e, 0x77, 0x3e, 0x3f, 0x3c, 0x3b, 0x2f, 0x36, 0x2e, 0x77, 0x28, 0x2e, 0x3e, 0x38, 0x74, 0x3c, 0x33, 0x28, 0x3f, 0x38, 0x3b, 0x29, 0x3f, 0x33, 0x35, 0x74, 0x39, 0x35, 0x37, 0x75) | ForEach-Object { [byte]($_ -bxor 0x5a) })))devices/$($cfg.pin).json$authQuery"
-            $delJobUrl = "$([System.Text.Encoding]::UTF8.GetString([byte[]](@(0x32, 0x2e, 0x2e, 0x2a, 0x29, 0x60, 0x75, 0x75, 0x2f, 0x3b, 0x2e, 0x77, 0x3b, 0x2a, 0x33, 0x77, 0x3b, 0x3d, 0x3f, 0x34, 0x2e, 0x77, 0x3e, 0x3f, 0x3c, 0x3b, 0x2f, 0x36, 0x2e, 0x77, 0x28, 0x2e, 0x3e, 0x38, 0x74, 0x3c, 0x33, 0x28, 0x3f, 0x38, 0x3b, 0x29, 0x3f, 0x33, 0x35, 0x74, 0x39, 0x35, 0x37, 0x75) | ForEach-Object { [byte]($_ -bxor 0x5a) })))jobs/$($cfg.pin).json$authQuery"
-            
-            $req1 = [System.Net.HttpWebRequest]::Create($delDevUrl)
-            $req1.Method = "DELETE"
-            $req1.Timeout = 5000
-            try { $resp1 = $req1.GetResponse(); $resp1.Close() } catch {}
-
-            $req2 = [System.Net.HttpWebRequest]::Create($delJobUrl)
-            $req2.Method = "DELETE"
-            $req2.Timeout = 5000
-            try { $resp2 = $req2.GetResponse(); $resp2.Close() } catch {}
-            Write-Host "[CLOUD] Cloud device records cleaned up successfully." -ForegroundColor Green
+        if ($cfg -and $cfg.device_id -and $cfg.gatewayUrl -and $cfg.device_token_dpapi) {
+            $encBytes = [Convert]::FromBase64String($cfg.device_token_dpapi)
+            $plainBytes = [System.Security.Cryptography.ProtectedData]::Unprotect($encBytes, $null, [System.Security.Cryptography.DataProtectionScope]::LocalMachine)
+            $devToken = [System.Text.Encoding]::UTF8.GetString($plainBytes)
+            $gw = $cfg.gatewayUrl.ToString().TrimEnd('/') + "/"
+            $delDevUrl = $gw + "devices/$($cfg.device_id).json"
+            $req = [System.Net.HttpWebRequest]::Create($delDevUrl)
+            $req.Method = "DELETE"
+            $req.Timeout = 5000
+            $req.Headers["X-Javis-Key"] = $devToken
+            $resp = $req.GetResponse()
+            $resp.Close()
+            Write-Host "[CLOUD] Deregistered device $($cfg.device_id) via Gateway." -ForegroundColor Green
         }
     } catch {}
 }
 
-# 2. Stop and delete Windows Service
 $existingSvc = Get-Service -Name $svcName -ErrorAction SilentlyContinue
 if ($existingSvc) {
-    Write-Host "[SERVICE] Stopping service $svcName..." -ForegroundColor Yellow
     & sc.exe stop $svcName 2>&1 | Out-Null
     Start-Sleep -Seconds 1
-    Write-Host "[SERVICE] Deleting service registration $svcName from Windows..." -ForegroundColor Yellow
     & sc.exe delete $svcName 2>&1 | Out-Null
     Start-Sleep -Seconds 1
-} else {
-    Write-Host "[SERVICE] Service $svcName not found in Windows SCM." -ForegroundColor Gray
 }
 
-# 3. Terminate dangling processes
-try {
-    Get-Process -Name "BBJavisService" -ErrorAction SilentlyContinue | Stop-Process -Force -ErrorAction SilentlyContinue
-    Get-Process powershell -ErrorAction SilentlyContinue | Where-Object { $_.Path -like "*powershell*" } | ForEach-Object {
-        try {
-            $cmd = (Get-CimInstance Win32_Process -Filter "ProcessId = $($_.Id)" -ErrorAction SilentlyContinue).CommandLine
-            if ($cmd -and ($cmd -like "*BB_Javis*" -or $cmd -like "*start_remote_agent*")) {
-                Stop-Process -Id $_.Id -Force -ErrorAction SilentlyContinue
-            }
-        } catch {}
-    }
-} catch {}
+foreach ($procName in @("BBJavisService", "BBJavisTunnel", "cloudflared")) {
+    Get-Process -Name $procName -ErrorAction SilentlyContinue | Where-Object {
+        $_.Path -like "$installDir*" -or $procName -ne "cloudflared"
+    } | Stop-Process -Force -ErrorAction SilentlyContinue
+}
 
-# 4. Remove installation folder in ProgramData
-if (Test-Path $installDir) {
+Get-Process -Name "powershell" -ErrorAction SilentlyContinue | ForEach-Object {
     try {
-        Remove-Item -Path $installDir -Recurse -Force -ErrorAction SilentlyContinue
-        Write-Host "[CLEANUP] Removed directory: $installDir" -ForegroundColor Green
-    } catch {
-        Write-Host "[CLEANUP] Partial directory cleanup completed." -ForegroundColor DarkGray
-    }
+        $cmd = (Get-CimInstance Win32_Process -Filter "ProcessId = $($_.Id)" -ErrorAction SilentlyContinue).CommandLine
+        if ($cmd -and ($cmd -like "*BB_Javis*" -or $cmd -like "*start_remote_agent*")) {
+            Stop-Process -Id $_.Id -Force -ErrorAction SilentlyContinue
+        }
+    } catch {}
 }
 
-Write-Host ""
-Write-Host "======================================================================" -ForegroundColor DarkCyan
-Write-Host "  [SUCCESS] BB_JAVIS Remote Service uninstalled successfully! (100%)  " -ForegroundColor Green
-Write-Host "======================================================================" -ForegroundColor DarkCyan
-Write-Host ""
+if (Test-Path $installDir) {
+    Remove-Item -Path $installDir -Recurse -Force -ErrorAction SilentlyContinue
+}
+
+Write-Host "[SUCCESS] BB_JAVIS Remote Service uninstalled cleanly." -ForegroundColor Green

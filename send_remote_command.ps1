@@ -1,140 +1,960 @@
 param (
-    [string]$ApiKey,
-    [string]$GatewayUrl,
-    [string]$FirebaseUrl = "$([System.Text.Encoding]::UTF8.GetString([byte[]](@(0x32, 0x2e, 0x2e, 0x2a, 0x29, 0x60, 0x75, 0x75, 0x2f, 0x3b, 0x2e, 0x77, 0x3b, 0x2a, 0x33, 0x77, 0x3b, 0x3d, 0x3f, 0x34, 0x2e, 0x77, 0x3e, 0x3f, 0x3c, 0x3b, 0x2f, 0x36, 0x2e, 0x77, 0x28, 0x2e, 0x3e, 0x38, 0x74, 0x3c, 0x33, 0x28, 0x3f, 0x38, 0x3b, 0x29, 0x3f, 0x33, 0x35, 0x74, 0x39, 0x35, 0x37, 0x75) | ForEach-Object { [byte]($_ -bxor 0x5a) })))",
-    [string]$FirebaseAuthToken = "$([System.Text.Encoding]::UTF8.GetString([byte[]](@(0x3c, 0x6d, 0x0a, 0x29, 0x03, 0x2a, 0x0d, 0x69, 0x00, 0x1c, 0x11, 0x0a, 0x6b, 0x11, 0x1e, 0x3d, 0x39, 0x3e, 0x0c, 0x68, 0x3e, 0x1c, 0x0a, 0x2e, 0x3e, 0x3b, 0x32, 0x11, 0x3c, 0x38, 0x32, 0x6b, 0x10, 0x12, 0x6c, 0x32, 0x6d, 0x16, 0x63, 0x6e) | ForEach-Object { [byte]($_ -bxor 0x5a) })))",
-    [Alias("Pin")][string]$SecretKey,
-    [string]$Mode,
-    [string]$JobId,
-    [string]$ConnectionString,
-    [string]$DbName,
-    [Alias("Command", "Script")][string]$SqlQuery,
-    [string]$SqlFile,
-    [string]$OutputDir,
-    [string]$LocalPath,
-    [string]$RemotePath,
-    [string]$ExecutionMode = "turbo",
+    [string]$ApiKey = "",
+    [string]$GatewayUrl = "",
+    [Alias("Pin")][string]$DeviceId = "",
+    [string]$Pair = "",
+    [string]$Mode = "",
+    [string]$DbProfile = "Default",
+    [string]$ConnectionString = "",
+    [Alias("Command", "Script")][string]$SqlQuery = "",
+    [string]$SqlFile = "",
+    [string]$OutputDir = "",
+    [string]$LocalPath = "",
+    [string]$RemotePath = "",
+    [string]$TargetHost = "",
     [int]$TimeoutSec = 300,
+    [int]$MaxRows = 500,
+    [switch]$RawData,
+    [switch]$ConfirmWrite,
+    [int]$LocalPort = 11433,
+    [int]$TargetPort = 1433,
+    [int]$DurationMin = 30,
+    [switch]$EphemeralReadOnlySql,
+    [string]$RevokeRole = "",
+    [string]$RevokeId = "",
     [switch]$List,
-    [string]$TargetHost,
-    [string]$TargetIp,
     [switch]$PurgeOffline
 )
 
-# Force console output encoding to UTF-8
-$OutputEncoding = [System.Text.Encoding]::UTF8
-[Console]::OutputEncoding = [System.Text.Encoding]::UTF8
+$ErrorActionPreference = "Stop"
 
-# Manage Firebase RTDB Auth Token
-if ([string]::IsNullOrWhiteSpace($FirebaseAuthToken)) {
-    if (-not [string]::IsNullOrWhiteSpace($env:BB_JAVIS_AUTH_TOKEN)) {
-        $FirebaseAuthToken = $env:BB_JAVIS_AUTH_TOKEN.Trim()
-    }
-}
-$script:FirebaseAuthToken = $FirebaseAuthToken
+try {
+    $OutputEncoding = [System.Text.Encoding]::UTF8
+    [Console]::OutputEncoding = [System.Text.Encoding]::UTF8
+} catch {}
 
-# Enable TLS 1.2 security protocol and connection pool limit
 try {
     [System.Net.ServicePointManager]::SecurityProtocol = 3072 -bor 768 -bor 192
     [System.Net.ServicePointManager]::DefaultConnectionLimit = 128
     [System.Net.ServicePointManager]::Expect100Continue = $false
     [System.Net.ServicePointManager]::MaxServicePointIdleTime = 5000
 } catch {}
-[System.Net.ServicePointManager]::ServerCertificateValidationCallback = { $true }
 
-# Set BaseUrl for Gateway / Command Board
-$BaseUrl = if (-not [string]::IsNullOrWhiteSpace($GatewayUrl)) { $GatewayUrl } else { $FirebaseUrl }
-if ($BaseUrl -notlike "*/") {
-    $BaseUrl = $BaseUrl + "/"
-}
+try {
+    Add-Type -AssemblyName System.Security -ErrorAction SilentlyContinue
+} catch {}
 
-# Function to manage machine API Key (Local Machine Persistence)
-function Get-OrPromptJavisApiKey {
-    param([string]$ArgKey)
+# __BEGIN_JAVIS_LIB__
+# BB_JAVIS Shared Cryptographic, SQL Guard & Audit Library (Pure ASCII, PowerShell 5.1 / .NET 4.x)
+try { Add-Type -AssemblyName System.Security -ErrorAction SilentlyContinue } catch {}
 
-    if (-not [string]::IsNullOrWhiteSpace($ArgKey)) {
-        return $ArgKey.Trim()
-    }
-    if (-not [string]::IsNullOrWhiteSpace($env:BB_JAVIS_API_KEY)) {
-        return $env:BB_JAVIS_API_KEY.Trim()
-    }
-
-    $configDir = Join-Path $env:LOCALAPPDATA "BB_Javis"
-    $configFile = Join-Path $configDir "config.json"
-    if (Test-Path $configFile) {
-        try {
-            $cfg = Get-Content $configFile -Raw -Encoding UTF8 | ConvertFrom-Json
-            if ($cfg -and -not [string]::IsNullOrWhiteSpace($cfg.apiKey)) {
-                return $cfg.apiKey.Trim()
-            }
-        } catch {}
-    }
-
-    # Built-in Enterprise Key for SDP UAT Tenant (Zero-Touch 100%)
-    $defaultKey = "$([System.Text.Encoding]::UTF8.GetString([byte[]](@(0x38, 0x38, 0x30, 0x05, 0x29, 0x3e, 0x2a, 0x2f, 0x3b, 0x2e, 0x05, 0x6c, 0x3b, 0x39, 0x6d, 0x63, 0x3c, 0x68, 0x69, 0x05, 0x6f, 0x3b, 0x63, 0x6f, 0x3e, 0x3c, 0x69, 0x6e, 0x62, 0x38, 0x38, 0x3e, 0x62, 0x3b, 0x68, 0x6e, 0x6e, 0x6a, 0x3f, 0x6d, 0x3b, 0x3f, 0x3b, 0x62, 0x6d, 0x3b, 0x38, 0x3e, 0x68, 0x3f, 0x62, 0x3c) | ForEach-Object { [byte]($_ -bxor 0x5a) })))"
+function New-JavisRandomBytes {
+    param([int]$Length = 32)
+    $bytes = New-Object byte[] $Length
+    $rng = New-Object System.Security.Cryptography.RNGCryptoServiceProvider
     try {
-        if (-not (Test-Path $configDir)) { $null = New-Item -ItemType Directory -Path $configDir -Force }
-        $saveObj = @{
-            apiKey = $defaultKey
-            savedAt = (Get-Date -Format "yyyy-MM-ddTHH:mm:ssZ")
-            machine = $env:COMPUTERNAME
-        }
-        $json = $saveObj | ConvertTo-Json
-        $utf8NoBom = New-Object System.Text.UTF8Encoding($false)
-        [System.IO.File]::WriteAllText($configFile, $json, $utf8NoBom)
-    } catch {}
-    return $defaultKey
+        $rng.GetBytes($bytes)
+    } finally {
+        $rng.Dispose()
+    }
+    return ,$bytes
 }
 
-$script:JavisApiKey = Get-OrPromptJavisApiKey -ArgKey $ApiKey
+function Get-JavisSha256Hex {
+    param([string]$Text)
+    if ($null -eq $Text) { $Text = "" }
+    $sha = [System.Security.Cryptography.SHA256]::Create()
+    try {
+        $hash = $sha.ComputeHash([System.Text.Encoding]::UTF8.GetBytes($Text))
+        return (($hash | ForEach-Object { $_.ToString("x2") }) -join "")
+    } finally {
+        $sha.Dispose()
+    }
+}
 
-# Native .NET HTTP Client Helper (Zero-Dependency 100% with X-Javis-Key)
-function Invoke-FirebaseHttp {
+function Test-JavisFixedTimeEquals {
+    param([byte[]]$A, [byte[]]$B)
+    if ($null -eq $A -or $null -eq $B -or $A.Length -ne $B.Length) { return $false }
+    $diff = 0
+    for ($i = 0; $i -lt $A.Length; $i++) {
+        $diff = $diff -bor ($A[$i] -bxor $B[$i])
+    }
+    return ($diff -eq 0)
+}
+
+function New-JavisRsaKeyPair {
+    $rsa = New-Object System.Security.Cryptography.RSACryptoServiceProvider(2048)
+    try {
+        $rsa.PersistKeyInCsp = $false
+        return @{
+            PublicXml  = $rsa.ToXmlString($false)
+            PrivateXml = $rsa.ToXmlString($true)
+        }
+    } finally {
+        $rsa.Dispose()
+    }
+}
+
+function Protect-JavisLocalSecret {
     param(
-        [Parameter(Mandatory=$true)][string]$Uri,
+        [Parameter(Mandatory = $true)][string]$PlainText,
+        [ValidateSet("CurrentUser", "LocalMachine")][string]$Scope = "CurrentUser"
+    )
+    $dpScope = if ($Scope -eq "LocalMachine") {
+        [System.Security.Cryptography.DataProtectionScope]::LocalMachine
+    } else {
+        [System.Security.Cryptography.DataProtectionScope]::CurrentUser
+    }
+    $bytes = [System.Text.Encoding]::UTF8.GetBytes($PlainText)
+    $protected = [System.Security.Cryptography.ProtectedData]::Protect($bytes, $null, $dpScope)
+    return [Convert]::ToBase64String($protected)
+}
+
+function Unprotect-JavisLocalSecret {
+    param(
+        [Parameter(Mandatory = $true)][string]$ProtectedBase64,
+        [ValidateSet("CurrentUser", "LocalMachine")][string]$Scope = "CurrentUser"
+    )
+    $dpScope = if ($Scope -eq "LocalMachine") {
+        [System.Security.Cryptography.DataProtectionScope]::LocalMachine
+    } else {
+        [System.Security.Cryptography.DataProtectionScope]::CurrentUser
+    }
+    $protected = [Convert]::FromBase64String($ProtectedBase64)
+    $bytes = [System.Security.Cryptography.ProtectedData]::Unprotect($protected, $null, $dpScope)
+    return [System.Text.Encoding]::UTF8.GetString($bytes)
+}
+
+function Protect-JavisPayload {
+    param(
+        [Parameter(Mandatory = $true)][string]$PlainJson,
+        [Parameter(Mandatory = $true)][string]$RecipientPubXml,
+        [Parameter(Mandatory = $true)][string]$SenderPrivXml,
+        [Parameter(Mandatory = $true)][string]$JobId,
+        [string]$TimestampUtc = ""
+    )
+
+    if ([string]::IsNullOrWhiteSpace($TimestampUtc)) {
+        $TimestampUtc = [DateTime]::UtcNow.ToString("yyyy-MM-ddTHH:mm:ssZ")
+    }
+
+    $aesKey = New-JavisRandomBytes -Length 32
+    $hmacKey = New-JavisRandomBytes -Length 32
+    $iv = New-JavisRandomBytes -Length 16
+
+    $aes = New-Object System.Security.Cryptography.AesManaged
+    $aes.KeySize = 256
+    $aes.Mode = [System.Security.Cryptography.CipherMode]::CBC
+    $aes.Padding = [System.Security.Cryptography.PaddingMode]::PKCS7
+    $aes.Key = $aesKey
+    $aes.IV = $iv
+
+    $plainBytes = [System.Text.Encoding]::UTF8.GetBytes($PlainJson)
+    $ctBytes = $null
+    $enc = $aes.CreateEncryptor()
+    try {
+        $ctBytes = $enc.TransformFinalBlock($plainBytes, 0, $plainBytes.Length)
+    } finally {
+        $enc.Dispose()
+        $aes.Dispose()
+    }
+
+    # Encrypt-then-MAC: HMAC-SHA256 over (iv || ct)
+    $macInput = New-Object byte[] ($iv.Length + $ctBytes.Length)
+    [Buffer]::BlockCopy($iv, 0, $macInput, 0, $iv.Length)
+    [Buffer]::BlockCopy($ctBytes, 0, $macInput, $iv.Length, $ctBytes.Length)
+
+    $hmac = New-Object System.Security.Cryptography.HMACSHA256 -ArgumentList (,$hmacKey)
+    try {
+        $macBytes = $hmac.ComputeHash($macInput)
+    } finally {
+        $hmac.Dispose()
+    }
+
+    # Wrap (aesKey || hmacKey) with recipient RSA-2048 OAEP
+    $keyBlob = New-Object byte[] 64
+    [Buffer]::BlockCopy($aesKey, 0, $keyBlob, 0, 32)
+    [Buffer]::BlockCopy($hmacKey, 0, $keyBlob, 32, 32)
+
+    $rsaEnc = New-Object System.Security.Cryptography.RSACryptoServiceProvider
+    try {
+        $rsaEnc.PersistKeyInCsp = $false
+        $rsaEnc.FromXmlString($RecipientPubXml)
+        $ekBytes = $rsaEnc.Encrypt($keyBlob, $true)
+    } finally {
+        $rsaEnc.Dispose()
+    }
+
+    $ekB64 = [Convert]::ToBase64String($ekBytes)
+    $ivB64 = [Convert]::ToBase64String($iv)
+    $ctB64 = [Convert]::ToBase64String($ctBytes)
+    $macB64 = [Convert]::ToBase64String($macBytes)
+
+    $canonical = "2|$TimestampUtc|$JobId|$ekB64|$ivB64|$ctB64|$macB64"
+    $rsaSign = New-Object System.Security.Cryptography.RSACryptoServiceProvider
+    try {
+        $rsaSign.PersistKeyInCsp = $false
+        $rsaSign.FromXmlString($SenderPrivXml)
+        $sigBytes = $rsaSign.SignData([System.Text.Encoding]::UTF8.GetBytes($canonical), "SHA256")
+        $sigB64 = [Convert]::ToBase64String($sigBytes)
+    } finally {
+        $rsaSign.Dispose()
+    }
+
+    return (@{
+        v      = 2
+        ts     = $TimestampUtc
+        job_id = $JobId
+        ek     = $ekB64
+        iv     = $ivB64
+        ct     = $ctB64
+        mac    = $macB64
+        sig    = $sigB64
+    } | ConvertTo-Json -Compress)
+}
+
+function Unprotect-JavisPayload {
+    param(
+        [Parameter(Mandatory = $true)]$Envelope,
+        [Parameter(Mandatory = $true)][string]$RecipientPrivXml,
+        [Parameter(Mandatory = $true)][string]$ExpectedSenderPubXml,
+        [Parameter(Mandatory = $true)][string]$ExpectedJobId,
+        [int]$MaxSkewSec = 300
+    )
+
+    if (-not $Envelope -or $Envelope.v -ne 2) {
+        throw "Unsupported or missing E2E envelope version."
+    }
+    if ($Envelope.job_id -ne $ExpectedJobId) {
+        throw "Envelope job_id mismatch."
+    }
+
+    $tsUtc = [DateTime]::Parse($Envelope.ts).ToUniversalTime()
+    $skew = [Math]::Abs(([DateTime]::UtcNow - $tsUtc).TotalSeconds)
+    if ($skew -gt $MaxSkewSec) {
+        throw "Envelope timestamp outside allowed clock skew (${MaxSkewSec}s)."
+    }
+
+    # Verify RSA-SHA256 sender signature before decrypting
+    $canonical = "2|$($Envelope.ts)|$($Envelope.job_id)|$($Envelope.ek)|$($Envelope.iv)|$($Envelope.ct)|$($Envelope.mac)"
+    $sigBytes = [Convert]::FromBase64String($Envelope.sig)
+    $rsaVerify = New-Object System.Security.Cryptography.RSACryptoServiceProvider
+    try {
+        $rsaVerify.PersistKeyInCsp = $false
+        $rsaVerify.FromXmlString($ExpectedSenderPubXml)
+        $sigValid = $rsaVerify.VerifyData([System.Text.Encoding]::UTF8.GetBytes($canonical), "SHA256", $sigBytes)
+    } finally {
+        $rsaVerify.Dispose()
+    }
+    if (-not $sigValid) {
+        throw "Invalid sender signature."
+    }
+
+    # Unwrap aesKey || hmacKey
+    $ekBytes = [Convert]::FromBase64String($Envelope.ek)
+    $rsaDec = New-Object System.Security.Cryptography.RSACryptoServiceProvider
+    try {
+        $rsaDec.PersistKeyInCsp = $false
+        $rsaDec.FromXmlString($RecipientPrivXml)
+        $keyBlob = $rsaDec.Decrypt($ekBytes, $true)
+    } finally {
+        $rsaDec.Dispose()
+    }
+    if ($keyBlob.Length -ne 64) {
+        throw "Invalid wrapped key length."
+    }
+
+    $aesKey = New-Object byte[] 32
+    $hmacKey = New-Object byte[] 32
+    [Buffer]::BlockCopy($keyBlob, 0, $aesKey, 0, 32)
+    [Buffer]::BlockCopy($keyBlob, 32, $hmacKey, 0, 32)
+
+    $iv = [Convert]::FromBase64String($Envelope.iv)
+    $ctBytes = [Convert]::FromBase64String($Envelope.ct)
+    $macBytes = [Convert]::FromBase64String($Envelope.mac)
+
+    $macInput = New-Object byte[] ($iv.Length + $ctBytes.Length)
+    [Buffer]::BlockCopy($iv, 0, $macInput, 0, $iv.Length)
+    [Buffer]::BlockCopy($ctBytes, 0, $macInput, $iv.Length, $ctBytes.Length)
+
+    $hmac = New-Object System.Security.Cryptography.HMACSHA256 -ArgumentList (,$hmacKey)
+    try {
+        $expectedMac = $hmac.ComputeHash($macInput)
+    } finally {
+        $hmac.Dispose()
+    }
+    if (-not (Test-JavisFixedTimeEquals -A $macBytes -B $expectedMac)) {
+        throw "HMAC authentication failed (ciphertext tampered)."
+    }
+
+    $aes = New-Object System.Security.Cryptography.AesManaged
+    $aes.KeySize = 256
+    $aes.Mode = [System.Security.Cryptography.CipherMode]::CBC
+    $aes.Padding = [System.Security.Cryptography.PaddingMode]::PKCS7
+    $aes.Key = $aesKey
+    $aes.IV = $iv
+
+    $dec = $aes.CreateDecryptor()
+    try {
+        $plainBytes = $dec.TransformFinalBlock($ctBytes, 0, $ctBytes.Length)
+        return [System.Text.Encoding]::UTF8.GetString($plainBytes)
+    } finally {
+        $dec.Dispose()
+        $aes.Dispose()
+    }
+}
+
+function Test-JavisReadOnlySql {
+    param([string]$Sql)
+    if ([string]::IsNullOrWhiteSpace($Sql)) { return $false }
+
+    # Strip single-quoted string literals, block comments, and line comments cleanly
+    $stripped = [regex]::Replace($Sql, "'(?:''|[^'])*'", " '' ")
+    $stripped = [regex]::Replace($stripped, "/\*[\s\S]*?\*/", " ")
+    $stripped = [regex]::Replace($stripped, "--[^\r\n]*", " ")
+    $stripped = $stripped.Trim()
+
+    if ([string]::IsNullOrWhiteSpace($stripped)) { return $false }
+
+    # Allow at most one trailing semicolon; reject stacked batches
+    $noTrailing = $stripped.TrimEnd(';').Trim()
+    if ($noTrailing.Contains(";")) { return $false }
+
+    # Must begin with SELECT or WITH
+    if ($noTrailing -notmatch "^(?i)(SELECT|WITH)\b") { return $false }
+
+    # Block mutating / procedural / dangerous statements
+    $forbidden = "\b(INSERT|UPDATE|DELETE|MERGE|DROP|ALTER|CREATE|TRUNCATE|EXEC|EXECUTE|INTO|GRANT|REVOKE|DENY|BACKUP|RESTORE|DBCC|SHUTDOWN|RECONFIGURE|OPENROWSET|OPENDATASOURCE|BULK)\b|\b(xp_|sp_)[a-zA-Z0-9_]+"
+    if ($noTrailing -match $forbidden) { return $false }
+
+    return $true
+}
+
+function Protect-JavisPiiTable {
+    param(
+        $Rows,
+        [switch]$RawData
+    )
+    if ($null -eq $Rows) { return @() }
+    $rowList = @($Rows)
+    if ($RawData.IsPresent -or $rowList.Count -eq 0) {
+        return ,$rowList
+    }
+
+    $sensitivePattern = "(?i)(password|pwd|pass|secret|token|apikey|api_key|salt|hash|pin|otp|citizen|national_id|id_card|passport|phone|mobile|tel|email|mail|bank|account_no|card_no|cvv|address|salary|tax_id)"
+    $maskedRows = [System.Collections.Generic.List[object]]::new()
+
+    foreach ($r in $rowList) {
+        if ($null -eq $r) { continue }
+        $copy = [ordered]@{}
+        foreach ($prop in $r.PSObject.Properties) {
+            $name = $prop.Name
+            $val = $prop.Value
+            if ($name -match $sensitivePattern -and $null -ne $val -and -not [string]::IsNullOrEmpty($val.ToString())) {
+                $s = $val.ToString()
+                if ($s.Length -gt 4) {
+                    $copy[$name] = "***" + $s.Substring($s.Length - 2)
+                } else {
+                    $copy[$name] = "***REDACTED***"
+                }
+            } else {
+                $copy[$name] = $val
+            }
+        }
+        $maskedRows.Add([PSCustomObject]$copy)
+    }
+
+    return ,($maskedRows.ToArray())
+}
+
+function Add-JavisAuditEntry {
+    param(
+        [Parameter(Mandatory = $true)][string]$AuditDir,
+        [Parameter(Mandatory = $true)][string]$JobId,
+        [Parameter(Mandatory = $true)][string]$AdminId,
+        [Parameter(Mandatory = $true)][string]$Mode,
+        [string]$DbProfile = "",
+        [string]$CommandText = "",
+        [int]$ExitCode = 0,
+        [int]$RowsAffected = 0
+    )
+    if (-not (Test-Path $AuditDir)) {
+        $null = New-Item -ItemType Directory -Path $AuditDir -Force
+    }
+    $ym = [DateTime]::UtcNow.ToString("yyyy-MM")
+    $auditFile = Join-Path $AuditDir "audit_$ym.jsonl"
+    $prevHash = "GENESIS"
+    $seq = 1
+    if (Test-Path $auditFile) {
+        $lastLine = Get-Content $auditFile -Tail 1 -Encoding UTF8 -ErrorAction SilentlyContinue
+        if (-not [string]::IsNullOrWhiteSpace($lastLine)) {
+            try {
+                $lastObj = $lastLine | ConvertFrom-Json
+                if ($lastObj -and $lastObj.entry_hash) {
+                    $prevHash = $lastObj.entry_hash
+                    $seq = [int]$lastObj.seq + 1
+                }
+            } catch {}
+        }
+    }
+    $tsUtc = [DateTime]::UtcNow.ToString("yyyy-MM-ddTHH:mm:ssZ")
+    $cmdSha = Get-JavisSha256Hex -Text $CommandText
+    $bodyForHash = "$seq|$tsUtc|$JobId|$AdminId|$Mode|$DbProfile|$cmdSha|$ExitCode|$RowsAffected|$prevHash"
+    $entryHash = Get-JavisSha256Hex -Text $bodyForHash
+
+    $entry = @{
+        seq            = $seq
+        ts_utc         = $tsUtc
+        job_id         = $JobId
+        admin_id       = $AdminId
+        mode           = $Mode
+        db_profile     = $DbProfile
+        command_sha256 = $cmdSha
+        exit_code      = $ExitCode
+        rows_affected  = $RowsAffected
+        prev_hash      = $prevHash
+        entry_hash     = $entryHash
+    } | ConvertTo-Json -Compress
+
+    $utf8NoBom = New-Object System.Text.UTF8Encoding($false)
+    $sw = New-Object System.IO.StreamWriter($auditFile, $true, $utf8NoBom)
+    try {
+        $sw.WriteLine($entry)
+    } finally {
+        $sw.Dispose()
+    }
+    return $entryHash
+}
+
+# BB_JAVIS Native WebSocket-to-TCP Tunnel Library (Pure ASCII, PowerShell 5.1 / .NET 4.5+)
+
+function Get-JavisCscPath {
+    $csc64 = Join-Path $env:WINDIR "Microsoft.NET\Framework64\v4.0.30319\csc.exe"
+    if (Test-Path $csc64) { return $csc64 }
+    $csc32 = Join-Path $env:WINDIR "Microsoft.NET\Framework\v4.0.30319\csc.exe"
+    if (Test-Path $csc32) { return $csc32 }
+    throw "csc.exe (.NET Framework 4.x) not found."
+}
+
+function Ensure-JavisTunnelExe {
+    param([Parameter(Mandatory = $true)][string]$BinDir)
+    if (-not (Test-Path $BinDir)) {
+        $null = New-Item -ItemType Directory -Path $BinDir -Force
+    }
+    $exePath = Join-Path $BinDir "BBJavisTunnel.exe"
+    $csPath = Join-Path $BinDir "BBJavisTunnel.cs"
+
+    $csSource = @'
+using System;
+using System.Collections.Generic;
+using System.IO;
+using System.Net;
+using System.Net.Sockets;
+using System.Net.WebSockets;
+using System.Security.Cryptography;
+using System.Text;
+using System.Threading;
+using System.Threading.Tasks;
+
+namespace BBJavisTunnel
+{
+    class Program
+    {
+        static int Main(string[] args)
+        {
+            ServicePointManager.SecurityProtocol = (SecurityProtocolType)3072 | (SecurityProtocolType)768 | (SecurityProtocolType)192;
+            if (args.Length >= 5 && args[0] == "server")
+            {
+                int wsPort = int.Parse(args[1]);
+                string targetHost = args[2];
+                int targetPort = int.Parse(args[3]);
+                string token = args[4];
+                int ttlSec = args.Length >= 6 ? int.Parse(args[5]) : 1800;
+                return RunServer(wsPort, targetHost, targetPort, token, ttlSec);
+            }
+            if (args.Length >= 4 && args[0] == "client")
+            {
+                int localPort = int.Parse(args[1]);
+                string wssUrl = args[2];
+                string token = args[3];
+                return RunClient(localPort, wssUrl, token);
+            }
+            int legacyPort;
+            if (args.Length >= 4 && int.TryParse(args[0], out legacyPort))
+            {
+                string targetHost = args[1];
+                int targetPort = int.Parse(args[2]);
+                string token = args[3];
+                int ttlSec = args.Length >= 5 ? int.Parse(args[4]) : 1800;
+                return RunServer(legacyPort, targetHost, targetPort, token, ttlSec);
+            }
+            Console.Error.WriteLine("Usage: BBJavisTunnel.exe server <wsPort> <targetHost> <targetPort> <token> [ttlSec]");
+            Console.Error.WriteLine("       BBJavisTunnel.exe client <localPort> <wssUrl> <token>");
+            return 2;
+        }
+
+        static bool ConstantTimeEquals(string a, string b)
+        {
+            if (a == null || b == null) return false;
+            byte[] ba = Encoding.UTF8.GetBytes(a);
+            byte[] bb = Encoding.UTF8.GetBytes(b);
+            if (ba.Length != bb.Length) return false;
+            int diff = 0;
+            for (int i = 0; i < ba.Length; i++) diff |= (ba[i] ^ bb[i]);
+            return diff == 0;
+        }
+
+        static int RunServer(int wsPort, string targetHost, int targetPort, string expectedToken, int ttlSec)
+        {
+            if (targetHost != "127.0.0.1" && targetHost.ToLowerInvariant() != "localhost")
+            {
+                Console.Error.WriteLine("Target host restricted to loopback.");
+                return 3;
+            }
+
+            TcpListener listener = new TcpListener(IPAddress.Loopback, wsPort);
+            listener.Start();
+            Console.WriteLine("LISTENING 127.0.0.1:" + wsPort);
+            Console.Out.Flush();
+
+            using (Timer ttlTimer = new Timer(_ => { try { listener.Stop(); } catch {} Environment.Exit(0); }, null, ttlSec * 1000, Timeout.Infinite))
+            {
+                while (true)
+                {
+                    try
+                    {
+                        TcpClient wsTcp = listener.AcceptTcpClient();
+                        wsTcp.NoDelay = true;
+                        Thread t = new Thread(() => HandleServerClient(wsTcp, targetHost, targetPort, expectedToken));
+                        t.IsBackground = true;
+                        t.Start();
+                    }
+                    catch
+                    {
+                        break;
+                    }
+                }
+            }
+            return 0;
+        }
+
+        static void HandleServerClient(TcpClient wsTcp, string targetHost, int targetPort, string expectedToken)
+        {
+            TcpClient dbTcp = null;
+            try
+            {
+                NetworkStream wsStream = wsTcp.GetStream();
+                string headersRaw = ReadHttpHeaders(wsStream);
+                if (string.IsNullOrEmpty(headersRaw)) { wsTcp.Close(); return; }
+
+                string wsKey = null;
+                string authHeader = null;
+                foreach (string line in headersRaw.Split(new[] { "\r\n" }, StringSplitOptions.RemoveEmptyEntries))
+                {
+                    int idx = line.IndexOf(':');
+                    if (idx <= 0) continue;
+                    string name = line.Substring(0, idx).Trim().ToLowerInvariant();
+                    string val = line.Substring(idx + 1).Trim();
+                    if (name == "sec-websocket-key") wsKey = val;
+                    else if (name == "authorization") authHeader = val;
+                }
+
+                string supplied = "";
+                if (!string.IsNullOrEmpty(authHeader) && authHeader.StartsWith("Bearer ", StringComparison.OrdinalIgnoreCase))
+                {
+                    supplied = authHeader.Substring(7).Trim();
+                }
+
+                if (string.IsNullOrEmpty(wsKey) || !ConstantTimeEquals(supplied, expectedToken))
+                {
+                    byte[] unauth = Encoding.ASCII.GetBytes("HTTP/1.1 401 Unauthorized\r\nContent-Length: 0\r\nConnection: close\r\n\r\n");
+                    wsStream.Write(unauth, 0, unauth.Length);
+                    wsStream.Flush();
+                    wsTcp.Close();
+                    return;
+                }
+
+                string acceptVal;
+                using (SHA1 sha1 = SHA1.Create())
+                {
+                    byte[] hash = sha1.ComputeHash(Encoding.ASCII.GetBytes(wsKey + "258EAFA5-E914-47DA-95CA-C5AB0DC85B11"));
+                    acceptVal = Convert.ToBase64String(hash);
+                }
+
+                byte[] handshake = Encoding.ASCII.GetBytes(
+                    "HTTP/1.1 101 Switching Protocols\r\n" +
+                    "Upgrade: websocket\r\n" +
+                    "Connection: Upgrade\r\n" +
+                    "Sec-WebSocket-Accept: " + acceptVal + "\r\n\r\n");
+                wsStream.Write(handshake, 0, handshake.Length);
+                wsStream.Flush();
+
+                dbTcp = new TcpClient();
+                dbTcp.NoDelay = true;
+                dbTcp.Connect(targetHost, targetPort);
+                NetworkStream dbStream = dbTcp.GetStream();
+
+                object writeLock = new object();
+                bool closed = false;
+
+                Thread dbToWs = new Thread(() =>
+                {
+                    byte[] buf = new byte[32768];
+                    try
+                    {
+                        while (!closed)
+                        {
+                            int n = dbStream.Read(buf, 0, buf.Length);
+                            if (n <= 0) break;
+                            lock (writeLock) { WriteWsFrame(wsStream, 0x02, buf, n); }
+                        }
+                    }
+                    catch {}
+                    finally
+                    {
+                        closed = true;
+                        try { lock (writeLock) { WriteWsFrame(wsStream, 0x08, new byte[0], 0); } } catch {}
+                        try { wsTcp.Close(); } catch {}
+                    }
+                });
+                dbToWs.IsBackground = true;
+                dbToWs.Start();
+
+                while (!closed)
+                {
+                    int opcode;
+                    byte[] payload = ReadWsFrame(wsStream, out opcode);
+                    if (payload == null || opcode == 0x08) break;
+                    if (opcode == 0x09)
+                    {
+                        lock (writeLock) { WriteWsFrame(wsStream, 0x0A, payload, payload.Length); }
+                        continue;
+                    }
+                    if (opcode == 0x01 || opcode == 0x02 || opcode == 0x00)
+                    {
+                        if (payload.Length > 0)
+                        {
+                            dbStream.Write(payload, 0, payload.Length);
+                            dbStream.Flush();
+                        }
+                    }
+                }
+                closed = true;
+            }
+            catch {}
+            finally
+            {
+                try { if (dbTcp != null) dbTcp.Close(); } catch {}
+                try { wsTcp.Close(); } catch {}
+            }
+        }
+
+        static string ReadHttpHeaders(NetworkStream stream)
+        {
+            List<byte> buf = new List<byte>(1024);
+            while (buf.Count < 16384)
+            {
+                int b = stream.ReadByte();
+                if (b < 0) return null;
+                buf.Add((byte)b);
+                int c = buf.Count;
+                if (c >= 4 && buf[c - 4] == 13 && buf[c - 3] == 10 && buf[c - 2] == 13 && buf[c - 1] == 10)
+                {
+                    return Encoding.ASCII.GetString(buf.ToArray());
+                }
+            }
+            return null;
+        }
+
+        static bool ReadExact(Stream s, byte[] buf, int count)
+        {
+            int offset = 0;
+            while (offset < count)
+            {
+                int n = s.Read(buf, offset, count - offset);
+                if (n <= 0) return false;
+                offset += n;
+            }
+            return true;
+        }
+
+        static byte[] ReadWsFrame(Stream s, out int opcode)
+        {
+            opcode = 0x08;
+            byte[] hdr = new byte[2];
+            if (!ReadExact(s, hdr, 2)) return null;
+            opcode = hdr[0] & 0x0F;
+            bool masked = (hdr[1] & 0x80) != 0;
+            long len = hdr[1] & 0x7F;
+            if (len == 126)
+            {
+                byte[] ext = new byte[2];
+                if (!ReadExact(s, ext, 2)) return null;
+                len = (ext[0] << 8) | ext[1];
+            }
+            else if (len == 127)
+            {
+                byte[] ext = new byte[8];
+                if (!ReadExact(s, ext, 8)) return null;
+                len = 0;
+                for (int i = 0; i < 8; i++) len = (len << 8) | ext[i];
+            }
+            if (len < 0 || len > 16 * 1024 * 1024) return null;
+
+            byte[] maskKey = new byte[4];
+            if (masked && !ReadExact(s, maskKey, 4)) return null;
+
+            byte[] payload = new byte[(int)len];
+            if (len > 0 && !ReadExact(s, payload, (int)len)) return null;
+            if (masked)
+            {
+                for (int i = 0; i < payload.Length; i++) payload[i] ^= maskKey[i % 4];
+            }
+            return payload;
+        }
+
+        static void WriteWsFrame(Stream s, int opcode, byte[] data, int count)
+        {
+            using (MemoryStream ms = new MemoryStream())
+            {
+                ms.WriteByte((byte)(0x80 | (opcode & 0x0F)));
+                if (count < 126)
+                {
+                    ms.WriteByte((byte)count);
+                }
+                else if (count <= 65535)
+                {
+                    ms.WriteByte(126);
+                    ms.WriteByte((byte)((count >> 8) & 0xFF));
+                    ms.WriteByte((byte)(count & 0xFF));
+                }
+                else
+                {
+                    ms.WriteByte(127);
+                    ulong ulen = (ulong)count;
+                    for (int i = 7; i >= 0; i--) ms.WriteByte((byte)((ulen >> (i * 8)) & 0xFF));
+                }
+                if (count > 0) ms.Write(data, 0, count);
+                byte[] frame = ms.ToArray();
+                s.Write(frame, 0, frame.Length);
+                s.Flush();
+            }
+        }
+
+        static int RunClient(int localPort, string wssUrl, string token)
+        {
+            TcpListener listener = new TcpListener(IPAddress.Loopback, localPort);
+            listener.Start();
+            Console.WriteLine("PROXY_READY 127.0.0.1:" + localPort);
+            Console.Out.Flush();
+
+            while (true)
+            {
+                try
+                {
+                    TcpClient localTcp = listener.AcceptTcpClient();
+                    localTcp.NoDelay = true;
+                    Task.Run(() => HandleProxyClient(localTcp, wssUrl, token));
+                }
+                catch
+                {
+                    break;
+                }
+            }
+            return 0;
+        }
+
+        static async Task HandleProxyClient(TcpClient localTcp, string wssUrl, string token)
+        {
+            ClientWebSocket ws = new ClientWebSocket();
+            ws.Options.SetRequestHeader("Authorization", "Bearer " + token);
+            try
+            {
+                await ws.ConnectAsync(new Uri(wssUrl), CancellationToken.None);
+                NetworkStream tcpStream = localTcp.GetStream();
+
+                Task t1 = Task.Run(async () =>
+                {
+                    byte[] buf = new byte[32768];
+                    try
+                    {
+                        while (ws.State == WebSocketState.Open)
+                        {
+                            int n = await tcpStream.ReadAsync(buf, 0, buf.Length);
+                            if (n <= 0) break;
+                            await ws.SendAsync(new ArraySegment<byte>(buf, 0, n), WebSocketMessageType.Binary, true, CancellationToken.None);
+                        }
+                    }
+                    catch {}
+                    try { await ws.CloseOutputAsync(WebSocketCloseStatus.NormalClosure, "EOF", CancellationToken.None); } catch {}
+                });
+
+                Task t2 = Task.Run(async () =>
+                {
+                    byte[] buf = new byte[32768];
+                    try
+                    {
+                        while (ws.State == WebSocketState.Open)
+                        {
+                            WebSocketReceiveResult res = await ws.ReceiveAsync(new ArraySegment<byte>(buf), CancellationToken.None);
+                            if (res.MessageType == WebSocketMessageType.Close) break;
+                            if (res.Count > 0)
+                            {
+                                await tcpStream.WriteAsync(buf, 0, res.Count);
+                                await tcpStream.FlushAsync();
+                            }
+                        }
+                    }
+                    catch {}
+                    try { localTcp.Close(); } catch {}
+                });
+
+                await Task.WhenAny(t1, t2);
+            }
+            catch {}
+            finally
+            {
+                try { ws.Dispose(); } catch {}
+                try { localTcp.Close(); } catch {}
+            }
+        }
+    }
+}
+'@
+
+    $utf8NoBom = New-Object System.Text.UTF8Encoding($false)
+    $needsBuild = -not (Test-Path $exePath)
+    if (-not $needsBuild -and (Test-Path $csPath)) {
+        $existingSrc = [System.IO.File]::ReadAllText($csPath, $utf8NoBom)
+        if ($existingSrc -ne $csSource) { $needsBuild = $true }
+    } elseif (-not (Test-Path $csPath)) {
+        $needsBuild = $true
+    }
+
+    if ($needsBuild) {
+        [System.IO.File]::WriteAllText($csPath, $csSource, $utf8NoBom)
+        $csc = Get-JavisCscPath
+        $out = & $csc /nologo /optimize+ /target:exe /out:$exePath $csPath 2>&1
+        if ($LASTEXITCODE -ne 0 -or -not (Test-Path $exePath)) {
+            throw "Failed to compile BBJavisTunnel.exe: $out"
+        }
+    }
+    return $exePath
+}
+
+function Ensure-CloudflaredBinary {
+    param([Parameter(Mandatory = $true)][string]$BinDir)
+    if (-not (Test-Path $BinDir)) {
+        $null = New-Item -ItemType Directory -Path $BinDir -Force
+    }
+    $cfPath = Join-Path $BinDir "cloudflared.exe"
+    if (Test-Path $cfPath) {
+        return $cfPath
+    }
+
+    $dlUrl = "https://github.com/cloudflare/cloudflared/releases/latest/download/cloudflared-windows-amd64.exe"
+    $apiUrl = "https://api.github.com/repos/cloudflare/cloudflared/releases/latest"
+
+    $expectedSha = $null
+    try {
+        $wcApi = New-Object System.Net.WebClient
+        $wcApi.Headers.Add("User-Agent", "BB_Javis/2.0")
+        $relJson = $wcApi.DownloadString($apiUrl) | ConvertFrom-Json
+        $wcApi.Dispose()
+        $asset = $relJson.assets | Where-Object { $_.name -eq "cloudflared-windows-amd64.exe" } | Select-Object -First 1
+        if ($asset -and $asset.digest -and $asset.digest -match "^sha256:([0-9a-fA-F]{64})$") {
+            $expectedSha = $Matches[1].ToLower()
+        }
+    } catch {}
+
+    $tmpDl = Join-Path $BinDir ("cloudflared_" + [Guid]::NewGuid().ToString("N").Substring(0, 6) + ".tmp")
+    $wc = New-Object System.Net.WebClient
+    $wc.Headers.Add("User-Agent", "BB_Javis/2.0")
+    try {
+        $wc.DownloadFile($dlUrl, $tmpDl)
+    } finally {
+        $wc.Dispose()
+    }
+
+    if ($expectedSha) {
+        $actualSha = (Get-FileHash -Path $tmpDl -Algorithm SHA256).Hash.ToLower()
+        if ($actualSha -ne $expectedSha) {
+            Remove-Item $tmpDl -Force -ErrorAction SilentlyContinue
+            throw "cloudflared.exe SHA-256 verification failed! Expected $expectedSha got $actualSha"
+        }
+    }
+
+    Move-Item -Path $tmpDl -Destination $cfPath -Force
+    return $cfPath
+}
+# __END_JAVIS_LIB__
+
+$utf8NoBom = New-Object System.Text.UTF8Encoding($false)
+$configDir = Join-Path $env:LOCALAPPDATA "BB_Javis"
+$configFile = Join-Path $configDir "config.json"
+$adminPrivFile = Join-Path $configDir "admin_key.dpapi"
+$adminPubFile = Join-Path $configDir "admin_pub.xml"
+$pairedStoreFile = Join-Path $configDir "paired_devices.dpapi"
+$binDir = Join-Path $configDir "bin"
+
+$localCfg = $null
+if (Test-Path $configFile) {
+    try { $localCfg = Get-Content $configFile -Raw -Encoding UTF8 | ConvertFrom-Json } catch {}
+}
+
+$script:JavisApiKey = if (-not [string]::IsNullOrWhiteSpace($ApiKey)) { $ApiKey.Trim() }
+    elseif (-not [string]::IsNullOrWhiteSpace($env:BB_JAVIS_API_KEY)) { $env:BB_JAVIS_API_KEY.Trim() }
+    elseif ($localCfg -and $localCfg.apiKey) { $localCfg.apiKey.ToString().Trim() }
+    else { "" }
+
+$BaseUrl = if (-not [string]::IsNullOrWhiteSpace($GatewayUrl)) { $GatewayUrl.Trim().TrimEnd('/') + "/" }
+    elseif (-not [string]::IsNullOrWhiteSpace($env:BB_JAVIS_GATEWAY_URL)) { $env:BB_JAVIS_GATEWAY_URL.Trim().TrimEnd('/') + "/" }
+    elseif ($localCfg -and $localCfg.gatewayUrl) { $localCfg.gatewayUrl.ToString().Trim().TrimEnd('/') + "/" }
+    else { "https://bb-javis-gateway.apisit-yimboa.workers.dev/" }
+
+if ([string]::IsNullOrWhiteSpace($script:JavisApiKey) -or [string]::IsNullOrWhiteSpace($BaseUrl)) {
+    throw "Missing Admin API Key or GatewayUrl. Run gen_key.bat -SaveToThisMachine first, or pass -ApiKey and -GatewayUrl."
+}
+
+$script:AdminId = if ($localCfg -and $localCfg.adminId) { $localCfg.adminId.ToString() } else { "" }
+if ([string]::IsNullOrWhiteSpace($script:AdminId)) {
+    $parts = $script:JavisApiKey.Split('_')
+    if ($parts.Length -ge 4 -and $parts[0] -eq "bbj") { $script:AdminId = $parts[3] }
+}
+
+if (-not (Test-Path $adminPrivFile) -or -not (Test-Path $adminPubFile)) {
+    throw "Admin RSA keypair missing in $configDir. Run gen_key.bat -SaveToThisMachine."
+}
+$script:AdminPrivXml = Unprotect-JavisLocalSecret -ProtectedBase64 ([System.IO.File]::ReadAllText($adminPrivFile, $utf8NoBom)) -Scope "CurrentUser"
+$script:AdminPubXml = [System.IO.File]::ReadAllText($adminPubFile, $utf8NoBom)
+
+function Invoke-GatewayHttp {
+    param(
+        [Parameter(Mandatory = $true)][string]$Uri,
         [string]$Method = "GET",
         [string]$Body = $null,
-        [int]$TimeoutSec = 15,
-        [string]$Key = $script:JavisApiKey
+        [int]$TimeoutSec = 15
     )
-    $finalUri = $Uri
-    if (-not [string]::IsNullOrWhiteSpace($script:FirebaseAuthToken)) {
-        $sep = if ($finalUri.Contains("?")) { "&" } else { "?" }
-        if ($finalUri -notmatch "[?&]auth=") {
-            $finalUri = "$finalUri${sep}auth=$script:FirebaseAuthToken"
-        }
-    }
-    $request = [System.Net.HttpWebRequest]::Create($finalUri)
+    $request = [System.Net.HttpWebRequest]::Create($Uri)
     $request.Method = $Method
     $request.Timeout = $TimeoutSec * 1000
     $request.ReadWriteTimeout = $TimeoutSec * 1000
     $request.KeepAlive = $false
-
-    if (-not [string]::IsNullOrWhiteSpace($Key)) {
-        $request.Headers["X-Javis-Key"] = $Key
-        if ($Uri -notlike "$BaseUrl*") {
-            $request.Headers["Authorization"] = "Bearer " + $Key
-        }
-    }
+    $request.Headers["X-Javis-Key"] = $script:JavisApiKey
 
     if (-not [string]::IsNullOrEmpty($Body)) {
         $request.ContentType = "application/json; charset=utf-8"
-        $bytes = [System.Text.Encoding]::UTF8.GetBytes($Body)
+        $bytes = $utf8NoBom.GetBytes($Body)
         $request.ContentLength = $bytes.Length
-        try {
-            $reqStream = $request.GetRequestStream()
-            $reqStream.Write($bytes, 0, $bytes.Length)
-            $reqStream.Close()
-        } catch {
-            try { $request.Abort() } catch {}
-            throw $_
-        }
+        $reqStream = $request.GetRequestStream()
+        try { $reqStream.Write($bytes, 0, $bytes.Length) }
+        finally { $reqStream.Close() }
     }
 
     try {
         $response = $request.GetResponse()
         $respStream = $response.GetResponseStream()
-        $reader = New-Object System.IO.StreamReader($respStream, [System.Text.Encoding]::UTF8)
+        $reader = New-Object System.IO.StreamReader($respStream, $utf8NoBom)
         $result = $reader.ReadToEnd()
         $reader.Close()
         $respStream.Close()
@@ -144,7 +964,7 @@ function Invoke-FirebaseHttp {
         if ($_.Response) {
             try {
                 $respStream = $_.Response.GetResponseStream()
-                $reader = New-Object System.IO.StreamReader($respStream, [System.Text.Encoding]::UTF8)
+                $reader = New-Object System.IO.StreamReader($respStream, $utf8NoBom)
                 $errResult = $reader.ReadToEnd()
                 $reader.Close()
                 $respStream.Close()
@@ -152,1252 +972,295 @@ function Invoke-FirebaseHttp {
                 return $errResult
             } catch {}
         }
-        try { $request.Abort() } catch {}
         throw $_
     } finally {
         try { $request.Abort() } catch {}
     }
 }
 
-
-
-Write-Host "==========================================" -ForegroundColor Cyan
-Write-Host " CMD_Remote Command Sender (AI and DB Mode)" -ForegroundColor Cyan
-Write-Host "==========================================" -ForegroundColor Cyan
-
-# Load last connection profile for convenience
-$profilePath = Join-Path $env:TEMP "cmd_remote_db_profile.json"
-$defaultConn = ""
-if (Test-Path $profilePath) {
-    try {
-        $profileData = Get-Content $profilePath -Raw | ConvertFrom-Json
-        $defaultConn = $profileData.ConnectionString
-    } catch {}
+function Load-PairedDevicesMap {
+    $map = @{}
+    if (Test-Path $pairedStoreFile) {
+        try {
+            $raw = Unprotect-JavisLocalSecret -ProtectedBase64 ([System.IO.File]::ReadAllText($pairedStoreFile, $utf8NoBom)) -Scope "CurrentUser"
+            $obj = $raw | ConvertFrom-Json
+            foreach ($p in $obj.PSObject.Properties) { $map[$p.Name] = $p.Value }
+        } catch {}
+    }
+    return $map
 }
 
-# --- Fleet Presence & Device Discovery Helper ---
+function Save-PairedDevicesMap {
+    param([hashtable]$Map)
+    if (-not (Test-Path $configDir)) { $null = New-Item -ItemType Directory -Path $configDir -Force }
+    $enc = Protect-JavisLocalSecret -PlainText ($Map | ConvertTo-Json -Depth 6 -Compress) -Scope "CurrentUser"
+    [System.IO.File]::WriteAllText($pairedStoreFile, $enc, $utf8NoBom)
+}
+
+if (-not [string]::IsNullOrWhiteSpace($Pair)) {
+    $claimBody = @{
+        pairing_code  = $Pair.Trim().ToUpper()
+        admin_pub_key = $script:AdminPubXml
+    } | ConvertTo-Json -Compress
+    $raw = Invoke-GatewayHttp -Uri ($BaseUrl + "pairing/claim") -Method "POST" -Body $claimBody -TimeoutSec 15
+    $res = $raw | ConvertFrom-Json
+    if (-not $res -or -not $res.device_id -or -not $res.device_pub_key) {
+        throw "Pairing claim failed: $raw"
+    }
+    $map = Load-PairedDevicesMap
+    $map[$res.device_id] = @{
+        device_id      = $res.device_id
+        hostname       = $res.hostname
+        custom_name    = $res.custom_name
+        device_pub_key = $res.device_pub_key
+        paired_at      = [DateTime]::UtcNow.ToString("yyyy-MM-ddTHH:mm:ssZ")
+    }
+    Save-PairedDevicesMap -Map $map
+    Write-Host "[PAIRED] Claimed device '$($res.custom_name)' ($($res.device_id)) successfully." -ForegroundColor Green
+    return
+}
+
+if ($Mode -eq "Revoke") {
+    if ([string]::IsNullOrWhiteSpace($RevokeRole) -or [string]::IsNullOrWhiteSpace($RevokeId)) {
+        throw "Specify -RevokeRole <adm|dev> and -RevokeId <id>."
+    }
+    $revBody = @{ role = $RevokeRole; subject_id = $RevokeId } | ConvertTo-Json -Compress
+    $raw = Invoke-GatewayHttp -Uri ($BaseUrl + "admin/revoke") -Method "POST" -Body $revBody -TimeoutSec 10
+    Write-Host $raw -ForegroundColor Yellow
+    return
+}
+
 function Get-RegisteredDevices {
-    param([string]$TargetBaseUrl)
-    
-    $devUrl = $TargetBaseUrl + "devices.json"
     $devList = [System.Collections.Generic.List[PSCustomObject]]::new()
-    try {
-        $raw = Invoke-FirebaseHttp -Uri $devUrl -Method "GET" -TimeoutSec 12
-        if (-not [string]::IsNullOrWhiteSpace($raw) -and $raw.Trim() -ne "null" -and $raw.Trim().StartsWith("{")) {
-            $data = ConvertFrom-Json -InputObject $raw.Trim() -ErrorAction SilentlyContinue
-            if ($data -and $data -is [System.Management.Automation.PSCustomObject]) {
-                $nowUtc = [DateTime]::UtcNow
-                foreach ($prop in $data.PSObject.Properties) {
-                    $d = $prop.Value
-                    if ($d) {
-                        $pin = $(if ($d.pin) { $d.pin.ToString() } else { $prop.Name })
-                        $hostname = $(if ($d.hostname) { $d.hostname.ToString() } else { "Unknown" })
-                        $customName = $(if ($d.custom_name) { $d.custom_name.ToString() } else { $hostname })
-                        $displayName = $(if ($customName -and $customName -ne $hostname) { "$customName ($hostname)" } else { $hostname })
-                        $localIp = $(if ($d.local_ip) { $d.local_ip.ToString() } else { "-" })
-                        $publicIp = $(if ($d.public_ip) { $d.public_ip.ToString() } else { "-" })
-                        $os = $(if ($d.os_version) { $d.os_version.ToString() } else { "Windows" })
-                        $isSvc = $(if ($d.service_mode) { $true } else { $false })
-                        $lastHbStr = $d.last_heartbeat
-
-                        $ageSec = 0
-                        $lastSeenText = "Just now"
-                        $hasValidHb = $false
-                        if ($lastHbStr) {
-                            try {
-                                $dt = [DateTime]::Parse($lastHbStr).ToUniversalTime()
-                                $diff = $nowUtc - $dt
-                                $ageSec = [int]$diff.TotalSeconds
-                                if ($ageSec -lt 0) { $ageSec = 0 }
-                                $hasValidHb = $true
-                                if ($ageSec -le 5) {
-                                    $lastSeenText = "Just now"
-                                } elseif ($ageSec -lt 60) {
-                                    $lastSeenText = "${ageSec}s ago"
-                                } elseif ($ageSec -lt 3600) {
-                                    $lastSeenText = "$([int]($ageSec/60))m ago"
-                                } elseif ($ageSec -lt 86400) {
-                                    $lastSeenText = "$([int]($ageSec/3600))h ago"
-                                } else {
-                                    $lastSeenText = "$([int]($ageSec/86400))d ago"
-                                }
-                            } catch {}
-                        }
-
-                        # Auto-purge offline devices inactive for > 24 hours (86400s) from Cloud (Housekeeping)
-                        if ($hasValidHb -and $ageSec -gt 86400) {
-                            try {
-                                $delDevUrl = $TargetBaseUrl + "devices/$pin.json"
-                                $null = Invoke-FirebaseHttp -Uri $delDevUrl -Method "DELETE" -TimeoutSec 3
-                            } catch {}
-                            continue
-                        }
-
-                        # Online status: active heartbeat within 180s (tolerates enterprise VM clock skew up to 3 mins)
-                        $isOnline = ($d.status -eq "online" -and $ageSec -le 180)
-                        $statusText = $(if ($isOnline) { "ONLINE" } else { "OFFLINE" })
-                        $typeText = $(if ($isSvc) { "Service" } else { "Temp" })
-
-                        $devList.Add([PSCustomObject]@{
-                            PIN = $pin
-                            Status = $statusText
-                            IsOnline = $isOnline
-                            Type = $typeText
-                            Hostname = $hostname
-                            CustomName = $customName
-                            DisplayName = $displayName
-                            LocalIP = $localIp
-                            PublicIP = $publicIp
-                            OS = $os
-                            AgeSec = $ageSec
-                            LastSeen = $lastSeenText
-                        })
-                    }
-                }
-            }
+    $raw = Invoke-GatewayHttp -Uri ($BaseUrl + "devices.json") -Method "GET" -TimeoutSec 12
+    if ([string]::IsNullOrWhiteSpace($raw) -or $raw.Trim() -eq "null") { return $devList }
+    $data = $raw | ConvertFrom-Json -ErrorAction SilentlyContinue
+    if (-not $data) { return $devList }
+    $nowUtc = [DateTime]::UtcNow
+    foreach ($prop in $data.PSObject.Properties) {
+        $d = $prop.Value
+        if (-not $d) { continue }
+        $id = if ($d.device_id) { $d.device_id.ToString() } else { $prop.Name }
+        $hostName = if ($d.hostname) { $d.hostname.ToString() } else { "Unknown" }
+        $custom = if ($d.custom_name) { $d.custom_name.ToString() } else { $hostName }
+        $ageSec = 999999
+        if ($d.last_heartbeat) {
+            try { $ageSec = [int]($nowUtc - [DateTime]::Parse($d.last_heartbeat).ToUniversalTime()).TotalSeconds } catch {}
         }
-    } catch {}
+        $isOnline = ($d.status -eq "online" -and $ageSec -le 180)
+        $devList.Add([PSCustomObject]@{
+            DeviceId     = $id
+            Status       = $(if ($isOnline) { "ONLINE" } else { "OFFLINE" })
+            IsOnline     = $isOnline
+            Hostname     = $hostName
+            CustomName   = $custom
+            DisplayName  = $(if ($custom -ne $hostName) { "$custom ($hostName)" } else { $hostName })
+            LocalIP      = $(if ($d.local_ip) { $d.local_ip.ToString() } else { "-" })
+            DevicePubKey = $(if ($d.device_pub_key) { $d.device_pub_key.ToString() } else { "" })
+            AgeSec       = $ageSec
+        })
+    }
     return $devList
 }
 
-function Show-FleetTable {
-    param($Devices)
-
-    Write-Host ""
-    Write-Host "==================================================================================================================" -ForegroundColor DarkCyan
-    Write-Host "                           BB_JAVIS FLEET MANAGEMENT - DEVICE STATUS & PRESENCE                           " -ForegroundColor Yellow
-    Write-Host "==================================================================================================================" -ForegroundColor DarkCyan
-    Write-Host ((" {0,-4} {1,-6} {2,-9} {3,-9} {4,-24} {5,-16} {6,-16} {7,-12}" -f "No.", "PIN", "STATUS", "TYPE", "COMPUTER NAME", "LOCAL IP", "PUBLIC IP", "LAST SEEN")) -ForegroundColor DarkGray
-    Write-Host "------------------------------------------------------------------------------------------------------------------" -ForegroundColor DarkGray
-
-    if (-not $Devices -or $Devices.Count -eq 0) {
-        Write-Host "  [!] No registered devices found (you can enter PIN directly)" -ForegroundColor DarkYellow
-        Write-Host "==================================================================================================================" -ForegroundColor DarkCyan
-        return
-    }
-
-    $idx = 1
-    foreach ($d in $Devices) {
-        $noStr = "[$idx]"
-        $pinStr = $d.PIN
-        $statStr = $d.Status
-        $typeStr = $d.Type
-        $hostStr = $(if ($d.DisplayName.Length -gt 24) { $d.DisplayName.Substring(0, 22) + ".." } else { $d.DisplayName })
-        $locIp = $(if ($d.LocalIP.Length -gt 16) { $d.LocalIP.Substring(0, 14) + ".." } else { $d.LocalIP })
-        $pubIp = $(if ($d.PublicIP.Length -gt 16) { $d.PublicIP.Substring(0, 14) + ".." } else { $d.PublicIP })
-        $lastSeen = $d.LastSeen
-
-        Write-Host (" {0,-4} " -f $noStr) -NoNewline -ForegroundColor White
-        Write-Host ("{0,-6} " -f $pinStr) -NoNewline -ForegroundColor Yellow
-
-        if ($d.IsOnline) {
-            Write-Host ("{0,-9} " -f $statStr) -NoNewline -ForegroundColor Green
-        } else {
-            Write-Host ("{0,-9} " -f $statStr) -NoNewline -ForegroundColor DarkGray
-        }
-
-        Write-Host ("{0,-9} " -f $typeStr) -NoNewline -ForegroundColor Cyan
-        Write-Host ("{0,-24} " -f $hostStr) -NoNewline -ForegroundColor Cyan
-        Write-Host ("{0,-16} " -f $locIp) -NoNewline -ForegroundColor Gray
-        Write-Host ("{0,-16} " -f $pubIp) -NoNewline -ForegroundColor Gray
-        Write-Host ("{0,-12}" -f $lastSeen) -ForegroundColor $(if ($d.IsOnline) { "Green" } else { "DarkGray" })
-        $idx++
-    }
-    Write-Host "==================================================================================================================" -ForegroundColor DarkCyan
-}
-
-# --- Handle -PurgeOffline flag ---
 if ($PurgeOffline.IsPresent) {
-    Write-Host "`n[FLEET PURGE] Searching and purging all OFFLINE devices..." -ForegroundColor Yellow
-    $allDevs = Get-RegisteredDevices -TargetBaseUrl $BaseUrl
-    $purgedCount = 0
-    foreach ($d in $allDevs) {
+    $devs = Get-RegisteredDevices
+    $cnt = 0
+    foreach ($d in $devs) {
         if (-not $d.IsOnline) {
-            try {
-                $delUrl = $BaseUrl + "devices/$($d.PIN).json"
-                $null = Invoke-FirebaseHttp -Uri $delUrl -Method "DELETE" -TimeoutSec 5
-                $purgedCount++
-                Write-Host "  -> Purged offline device: $($d.DisplayName) (PIN: $($d.PIN))" -ForegroundColor Gray
-            } catch {}
+            $null = Invoke-GatewayHttp -Uri ($BaseUrl + "devices/$($d.DeviceId).json") -Method "DELETE" -TimeoutSec 5
+            $cnt++
         }
     }
-    Write-Host "[SUCCESS] Purged offline devices from Cloud (total: $purgedCount devices)`n" -ForegroundColor Green
+    Write-Host "[PURGED] Removed $cnt offline device(s)." -ForegroundColor Green
     return
 }
 
-# --- Handle -List flag ---
 if ($List.IsPresent -or $Mode -eq "List") {
-    $devs = Get-RegisteredDevices -TargetBaseUrl $BaseUrl
-    Show-FleetTable -Devices $devs
+    $devs = Get-RegisteredDevices
+    $devs | Format-Table DeviceId, Status, DisplayName, LocalIP, AgeSec -AutoSize
     return
 }
 
-# --- Handle -TargetHost flag ---
-if (-not [string]::IsNullOrWhiteSpace($TargetHost) -and [string]::IsNullOrWhiteSpace($SecretKey)) {
-    $devs = Get-RegisteredDevices -TargetBaseUrl $BaseUrl
-    $targetTrim = $TargetHost.Trim().ToLower()
-    $matched = $devs | Where-Object { 
-        ($_.Hostname.ToLower() -eq $targetTrim -or ($_.CustomName -and $_.CustomName.ToLower() -eq $targetTrim)) -and $_.IsOnline 
+$pairedMap = Load-PairedDevicesMap
+if ([string]::IsNullOrWhiteSpace($DeviceId) -and -not [string]::IsNullOrWhiteSpace($TargetHost)) {
+    $devs = Get-RegisteredDevices
+    $t = $TargetHost.Trim().ToLower()
+    $m = $devs | Where-Object { ($_.Hostname.ToLower() -eq $t -or $_.CustomName.ToLower() -eq $t) -and $_.IsOnline } | Select-Object -First 1
+    if (-not $m) {
+        $m = $devs | Where-Object { ($_.Hostname.ToLower() -like "*$t*" -or $_.CustomName.ToLower() -like "*$t*") -and $_.IsOnline } | Select-Object -First 1
     }
-    if (-not $matched) {
-        $matched = $devs | Where-Object { 
-            ($_.Hostname.ToLower() -like "*$targetTrim*" -or ($_.CustomName -and $_.CustomName.ToLower() -like "*$targetTrim*")) -and $_.IsOnline 
-        }
+    if (-not $m) { throw "TargetHost '$TargetHost' not found online." }
+    $DeviceId = $m.DeviceId
+    if ($m.DevicePubKey -and -not $pairedMap.ContainsKey($DeviceId)) {
+        $pairedMap[$DeviceId] = @{ device_id = $DeviceId; device_pub_key = $m.DevicePubKey }
+        Save-PairedDevicesMap -Map $pairedMap
     }
-    if ($matched) {
-        $SecretKey = ($matched | Select-Object -First 1).PIN
-        Write-Host "`n[AUTO-TARGET] Found device '$($matched[0].DisplayName)' ONLINE -> Target PIN: [ $SecretKey ]" -ForegroundColor Green
+}
+
+if ([string]::IsNullOrWhiteSpace($DeviceId)) {
+    $devs = Get-RegisteredDevices
+    $devs | Format-Table DeviceId, Status, DisplayName, LocalIP, AgeSec -AutoSize
+    $DeviceId = (Read-Host "Enter target DeviceId").Trim()
+}
+
+if (-not $pairedMap.ContainsKey($DeviceId) -or -not $pairedMap[$DeviceId].device_pub_key) {
+    $devs = Get-RegisteredDevices
+    $found = $devs | Where-Object { $_.DeviceId -eq $DeviceId } | Select-Object -First 1
+    if ($found -and $found.DevicePubKey) {
+        $pairedMap[$DeviceId] = @{ device_id = $DeviceId; device_pub_key = $found.DevicePubKey }
+        Save-PairedDevicesMap -Map $pairedMap
     } else {
-        Write-Host "`n[ERROR] Target host or alias '$TargetHost' not found online!" -ForegroundColor Red
-        return
+        throw "No paired public key for '$DeviceId'. Run -Pair <PairingCode> first."
     }
 }
+$targetPubXml = $pairedMap[$DeviceId].device_pub_key.ToString()
 
-# --- Handle -TargetIp flag ---
-if (-not [string]::IsNullOrWhiteSpace($TargetIp) -and [string]::IsNullOrWhiteSpace($SecretKey)) {
-    $devs = Get-RegisteredDevices -TargetBaseUrl $BaseUrl
-    $ipTrim = $TargetIp.Trim()
-    $matched = $devs | Where-Object { ($_.LocalIP -eq $ipTrim -or $_.PublicIP -eq $ipTrim) -and $_.IsOnline }
-    if ($matched) {
-        $SecretKey = ($matched | Select-Object -First 1).PIN
-        Write-Host "`n[AUTO-TARGET] Found IP '$ipTrim' ($($matched[0].DisplayName)) ONLINE -> Target PIN: [ $SecretKey ]" -ForegroundColor Green
-    } else {
-        Write-Host "`n[ERROR] Target IP '$TargetIp' not found online!" -ForegroundColor Red
-        return
-    }
+if ([string]::IsNullOrWhiteSpace($Mode)) {
+    $Mode = if (-not [string]::IsNullOrWhiteSpace($SqlQuery) -or -not [string]::IsNullOrWhiteSpace($SqlFile)) { "PowerShell" } else { Read-Host "Enter Mode (PowerShell, Query, SqlExec, Tunnel, Download, Upload)" }
 }
 
-# --- 1. Interactive Device Selection or Prompt for Secret Key ---
-while ([string]::IsNullOrWhiteSpace($SecretKey)) {
-    $devs = Get-RegisteredDevices -TargetBaseUrl $BaseUrl
-    if ($devs -and $devs.Count -gt 0) {
-        Show-FleetTable -Devices $devs
-        $exampleName = if ($devs[0].CustomName) { $devs[0].CustomName } else { $devs[0].Hostname }
-        Write-Host "  Usage Instructions:" -ForegroundColor Yellow
-        Write-Host "   - Enter number [1-$($devs.Count)] to select target device" -ForegroundColor White
-        Write-Host "   - Or enter machine name (e.g. $exampleName) or IP to auto-match" -ForegroundColor White
-        Write-Host "   - Or enter 4-digit PIN directly" -ForegroundColor White
-        Write-Host "   - Press [N] Rename / Set Alias | [D] Delete device | [R] Refresh | [Q] Quit" -ForegroundColor Gray
-        Write-Host "------------------------------------------------------------------------------------------------------------------" -ForegroundColor DarkGray
-        
-        $sel = Read-Host "Select [1-$($devs.Count)], machine name, IP, or PIN"
-        if ([string]::IsNullOrWhiteSpace($sel)) { continue }
-        $sel = $sel.Trim()
+function Send-SignedJobAndWait {
+    param([hashtable]$InnerPayload, [int]$WaitSec = $TimeoutSec)
+    $jobId = "job-" + [Guid]::NewGuid().ToString("N").Substring(0, 12)
+    $innerJson = $InnerPayload | ConvertTo-Json -Depth 6 -Compress
+    $envObj = (Protect-JavisPayload -PlainJson $innerJson -RecipientPubXml $targetPubXml -SenderPrivXml $script:AdminPrivXml -JobId $jobId) | ConvertFrom-Json
 
-        if ($sel -eq "Q" -or $sel -eq "q") {
-            Write-Host "Cancelled by user.`n" -ForegroundColor Yellow
-            return
-        }
+    $jobDoc = @{
+        id          = $jobId
+        device_id   = $DeviceId
+        admin_id    = $script:AdminId
+        status      = "pending"
+        created_at  = [DateTime]::UtcNow.ToString("yyyy-MM-ddTHH:mm:ssZ")
+        timeout_sec = $WaitSec
+        abort       = $false
+        envelope    = $envObj
+    } | ConvertTo-Json -Depth 7 -Compress
 
-        if ($sel -eq "R" -or $sel -eq "r") {
-            Write-Host "Refreshing fleet devices..." -ForegroundColor Cyan
-            continue
-        }
+    $jobUrl = $BaseUrl + "jobs/$DeviceId/$jobId.json"
+    $null = Invoke-GatewayHttp -Uri $jobUrl -Method "PUT" -Body $jobDoc -TimeoutSec 15
 
-        if ($sel -eq "N" -or $sel -eq "n") {
-            Write-Host "`n[RENAME/ALIAS] Rename machine (Set Custom Host Name / Alias)" -ForegroundColor Yellow
-            $targetInput = Read-Host "Enter device number [1-$($devs.Count)] or PIN to rename"
-            if (-not [string]::IsNullOrWhiteSpace($targetInput)) {
-                $targetInput = $targetInput.Trim()
-                $targetDev = $null
-                $tNum = 0
-                if ([int]::TryParse($targetInput, [ref]$tNum) -and $tNum -ge 1 -and $tNum -le $devs.Count) {
-                    $targetDev = $devs[$tNum - 1]
-                } else {
-                    $targetDev = $devs | Where-Object { $_.PIN -eq $targetInput } | Select-Object -First 1
-                }
-
-                if ($targetDev) {
-                    $newAlias = Read-Host "Enter new name/alias for '$($targetDev.DisplayName)'"
-                    if (-not [string]::IsNullOrWhiteSpace($newAlias)) {
-                        $newAlias = $newAlias.Trim()
-                        Write-Host "[RENAME] Sending rename command '$newAlias' to PIN [ $($targetDev.PIN) ]..." -ForegroundColor Cyan
-                        try {
-                            $jobId = "alias_" + [Guid]::NewGuid().ToString("N").Substring(0, 8)
-                            $jobPayload = @{
-                                id = $jobId
-                                command = "@SET_ALIAS $newAlias"
-                                type = "powershell"
-                                status = "pending"
-                                created_at = (Get-Date -Format "yyyy-MM-ddTHH:mm:ssZ")
-                            } | ConvertTo-Json
-                            $jobUrl = $BaseUrl + "jobs/$($targetDev.PIN).json"
-                            $null = Invoke-FirebaseHttp -Uri $jobUrl -Method "PUT" -Body $jobPayload -TimeoutSec 10
-                            Write-Host "[SUCCESS] Rename command sent! Waiting for agent to update cloud..." -ForegroundColor Green
-                            Start-Sleep -Seconds 2
-                        } catch {
-                            Write-Host "[ERROR] Failed to send rename command: $_" -ForegroundColor Red
-                        }
-                    } else {
-                        Write-Host "[CANCEL] No name provided, rename cancelled" -ForegroundColor Yellow
-                    }
-                } else {
-                    Write-Host "[ERROR] Specified device not found" -ForegroundColor Red
-                }
-            }
-            continue
-        }
-
-        if ($sel -eq "D" -or $sel -eq "d") {
-            Write-Host "`n[KICK/DELETE] Delete device from Cloud" -ForegroundColor Yellow
-            $delInput = Read-Host "Enter device number [1-$($devs.Count)] or PIN to delete"
-            if (-not [string]::IsNullOrWhiteSpace($delInput)) {
-                $delInput = $delInput.Trim()
-                $targetDev = $null
-                $delNum = 0
-                if ([int]::TryParse($delInput, [ref]$delNum) -and $delNum -ge 1 -and $delNum -le $devs.Count) {
-                    $targetDev = $devs[$delNum - 1]
-                } else {
-                    $targetDev = $devs | Where-Object { $_.PIN -eq $delInput } | Select-Object -First 1
-                }
-
-                if ($targetDev) {
-                    try {
-                        $delDevUrl = $BaseUrl + "devices/$($targetDev.PIN).json"
-                        $delJobUrl = $BaseUrl + "jobs/$($targetDev.PIN).json"
-                        $null = Invoke-FirebaseHttp -Uri $delDevUrl -Method "DELETE" -TimeoutSec 5
-                        $null = Invoke-FirebaseHttp -Uri $delJobUrl -Method "DELETE" -TimeoutSec 5
-                        Write-Host "[SUCCESS] Kicked and deleted '$($targetDev.DisplayName)' (PIN: $($targetDev.PIN)) from cloud!" -ForegroundColor Green
-                    } catch {
-                        Write-Host "[ERROR] Failed to delete device: $_" -ForegroundColor Red
-                    }
-                } else {
-                    Write-Host "[ERROR] Specified device not found" -ForegroundColor Red
-                }
-            }
-            continue
-        }
-
-        # Check if input is a valid list number 1..N
-        $pickNum = 0
-        if ([int]::TryParse($sel, [ref]$pickNum) -and $pickNum -ge 1 -and $pickNum -le $devs.Count) {
-            $chosen = $devs[$pickNum - 1]
-            $SecretKey = $chosen.PIN
-            Write-Host "`n[SELECTED] Selected device [$pickNum] : $($chosen.DisplayName) -> Target PIN: [ $SecretKey ]" -ForegroundColor Green
-            break
-        }
-
-        # Check if matched machine name or custom alias
-        $byHost = $devs | Where-Object { 
-            $_.Hostname.ToLower() -eq $sel.ToLower() -or 
-            ($_.CustomName -and $_.CustomName.ToLower() -eq $sel.ToLower()) -or 
-            $_.Hostname.ToLower() -like "*$($sel.ToLower())*" -or 
-            ($_.CustomName -and $_.CustomName.ToLower() -like "*$($sel.ToLower())*") 
-        }
-        if ($byHost) {
-            $chosen = $byHost | Select-Object -First 1
-            $SecretKey = $chosen.PIN
-            Write-Host "`n[SELECTED] Matched machine name '$($chosen.DisplayName)' -> Target PIN: [ $SecretKey ]" -ForegroundColor Green
-            break
-        }
-
-        # Check if matched IP address
-        $byIp = $devs | Where-Object { $_.LocalIP -eq $sel -or $_.PublicIP -eq $sel }
-        if ($byIp) {
-            $chosen = $byIp | Select-Object -First 1
-            $SecretKey = $chosen.PIN
-            Write-Host "`n[SELECTED] Matched IP '$sel' ($($chosen.DisplayName)) -> Target PIN: [ $SecretKey ]" -ForegroundColor Green
-            break
-        }
-
-        # Or enter 4-digit PIN directly
-        if ($sel.Length -ge 4 -and $sel -match '^\d+$') {
-            $SecretKey = $sel
-            Write-Host "`n[MANUAL] Direct PIN entered: [ $SecretKey ]" -ForegroundColor Green
-            break
-        }
-
-        Write-Host "[!] Invalid selection, please try again" -ForegroundColor Yellow
-    } else {
-        Write-Host "`n[INFO] No registered fleet devices found online" -ForegroundColor Yellow
-        $SecretKey = Read-Host "Enter Remote Secret Key (4-digit PIN)"
-        if ([string]::IsNullOrWhiteSpace($SecretKey)) {
-            Write-Host "[ERROR] No Secret Key provided, aborting" -ForegroundColor Red
-            return
-        }
-        $SecretKey = $SecretKey.Trim()
-        break
-    }
-}
-
-if ($BaseUrl -notlike "*/") {
-    $BaseUrl = $BaseUrl + "/"
-}
-
-# --- 2. Prompt for operation mode if invalid ---
-$validModes = @("PowerShell", "Query", "Backup", "Download", "Upload", "Cancel")
-if ([string]::IsNullOrWhiteSpace($Mode) -or $validModes -notcontains $Mode) {
-    Write-Host "`nSelect Operation Mode:" -ForegroundColor Yellow
-    Write-Host "[1] PowerShell Command Mode (Standard)" -ForegroundColor White
-    Write-Host "[2] SQL Server Query Mode (Returns JSON)" -ForegroundColor White
-    Write-Host "[3] SQL Server Backup Mode (Base64 file retrieval)" -ForegroundColor White
-    Write-Host "[4] File Download Mode (Download directory/file)" -ForegroundColor White
-    Write-Host "[5] File Upload Mode (Upload directory/file)" -ForegroundColor White
-    Write-Host "[6] Emergency Cancel Mode (Abort running job)" -ForegroundColor Red
-    $modeChoice = Read-Host "Select option [1-6] (Default is 1)"
-    if ($modeChoice -eq "2") {
-        $Mode = "Query"
-    } elseif ($modeChoice -eq "3") {
-        $Mode = "Backup"
-    } elseif ($modeChoice -eq "4") {
-        $Mode = "Download"
-    } elseif ($modeChoice -eq "5") {
-        $Mode = "Upload"
-    } elseif ($modeChoice -eq "6") {
-        $Mode = "Cancel"
-    } else {
-        $Mode = "PowerShell"
-    }
-}
-
-# --- Emergency Cancel Mode Handler ---
-if ($Mode -eq "Cancel") {
-    Write-Host "`n[EMERGENCY CANCEL] Locating active job on Secret Key: $SecretKey..." -ForegroundColor Yellow
-    $targetJobId = $JobId
-    if (-not $targetJobId) {
-        $queryUrl = $BaseUrl + "jobs/$SecretKey.json"
-        $jsonRaw = Invoke-FirebaseHttp -Uri $queryUrl -Method "GET" -TimeoutSec 5
-        if ($jsonRaw -and $jsonRaw.Trim() -ne "null") {
-            $jobsObj = ConvertFrom-Json -InputObject $jsonRaw -ErrorAction SilentlyContinue
-            if ($jobsObj) {
-                foreach ($prop in $jobsObj.PSObject.Properties) {
-                    if ($prop.Value -and ($prop.Value.status -eq "running" -or $prop.Value.status -eq "pending")) {
-                        $targetJobId = $prop.Name
-                        break
-                    }
-                }
-            }
-        }
-    }
-    if ($targetJobId) {
-        Write-Host "Sending abort signal to Job ID: $targetJobId..." -ForegroundColor Red
-        $abortUrl = $BaseUrl + "jobs/$SecretKey/$targetJobId/abort.json"
-        $null = Invoke-FirebaseHttp -Uri $abortUrl -Method "PUT" -Body "true" -TimeoutSec 5
-        Write-Host "[SUCCESS] Emergency abort signal sent successfully to $targetJobId!" -ForegroundColor Green
-    } else {
-        Write-Host "[INFO] No pending or running job found for Secret Key $SecretKey." -ForegroundColor Yellow
-    }
-    return
-}
-
-# --- 3. Build script payload according to the mode ---
-$finalScript = ""
-$isReceiveFileJob = $false
-
-if ($Mode -eq "PowerShell") {
-    # Standard command execution
-    if ([string]::IsNullOrWhiteSpace($SqlQuery)) {
-        if (-not [string]::IsNullOrWhiteSpace($SqlFile) -and (Test-Path $SqlFile)) {
-            $SqlQuery = Get-Content $SqlFile -Encoding UTF8 -Raw
-        } else {
-            $SqlQuery = Read-Host "`nEnter PowerShell command to execute"
-        }
-    }
-    if ([string]::IsNullOrWhiteSpace($SqlQuery)) {
-        Write-Host "[WARNING] Command is empty. Aborting." -ForegroundColor Yellow
-        return
-    }
-    $finalScript = $SqlQuery
-}
-elseif ($Mode -eq "Query") {
-    # SQL query mode (Outputs JSON)
-    if ([string]::IsNullOrWhiteSpace($ConnectionString)) {
-        if ($defaultConn) {
-            Write-Host "`nEnter Connection String (Press Enter to use default: $defaultConn)" -ForegroundColor Yellow
-            $ConnectionString = Read-Host "Connection String"
-            if ([string]::IsNullOrWhiteSpace($ConnectionString)) {
-                $ConnectionString = $defaultConn
-            }
-        } else {
-            $ConnectionString = Read-Host "`nEnter SQL Server Connection String"
-        }
-    }
-    if ([string]::IsNullOrWhiteSpace($ConnectionString)) {
-        Write-Host "[ERROR] Connection String is empty. Aborting." -ForegroundColor Red
-        return
-    }
-    
-    # Save connection string profile
-    @{ ConnectionString = $ConnectionString } | ConvertTo-Json | Out-File $profilePath -Encoding utf8 -Force
-
-    $sqlContent = ""
-    if ([string]::IsNullOrWhiteSpace($SqlQuery)) {
-        if (-not [string]::IsNullOrWhiteSpace($SqlFile) -and (Test-Path $SqlFile)) {
-            $sqlContent = Get-Content $SqlFile -Encoding UTF8 -Raw
-        } else {
-            Write-Host "`nSelect SQL Script Source:" -ForegroundColor Yellow
-            Write-Host "[1] Enter SQL script directly" -ForegroundColor White
-            Write-Host "[2] Load from SQL file (.sql)" -ForegroundColor White
-            $sqlChoice = Read-Host "Select option [1-2]"
-            if ($sqlChoice -eq "2") {
-                $sqlPath = Read-Host "Enter path to .sql file"
-                if (Test-Path $sqlPath) {
-                    $sqlContent = Get-Content $sqlPath -Encoding UTF8 -Raw
-                } else {
-                    Write-Host "[ERROR] SQL file not found." -ForegroundColor Red
-                    return
-                }
-            } else {
-                $sqlContent = Read-Host "Enter SQL command (e.g. SELECT @@VERSION)"
-            }
-        }
-    } else {
-        $sqlContent = $SqlQuery
-    }
-
-    if ([string]::IsNullOrWhiteSpace($sqlContent)) {
-        Write-Host "[ERROR] SQL command is empty." -ForegroundColor Red
-        return
-    }
-
-    # Escape single quotes for PowerShell string literal compatibility
-    $escapedConn = $ConnectionString.Replace("'", "''")
-    $escapedSql = $sqlContent.Replace("'", "''")
-
-    # Generate ADO.NET query execution script
-    $finalScript = @"
-`$ConnectionString = '$escapedConn'
-`$Sql = '$escapedSql'
-
-try {
-    `$connection = New-Object System.Data.SqlClient.SqlConnection(`$ConnectionString)
-    `$connection.Open()
-    `$command = `$connection.CreateCommand()
-    `$command.CommandText = `$Sql
-    
-    `$adapter = New-Object System.Data.SqlClient.SqlDataAdapter(`$command)
-    `$dataset = New-Object System.Data.DataSet
-    `$adapter.Fill(`$dataset) | Out-Null
-    
-    `$table = `$dataset.Tables[0]
-    if (`$table) {
-        `$resultJson = ConvertTo-Json -InputObject `$table -Depth 3 -Compress
-        Write-Output `$resultJson
-    } else {
-        Write-Output '{"status":"success","message":"Command executed successfully. No records returned."}'
-    }
-} catch {
-    `$errPayload = @{
-        status = "failed"
-        error_type = "SQL_QUERY_ERROR"
-        message = `$_.Exception.Message
-    } | ConvertTo-Json -Compress
-    Write-Error `$errPayload
-    exit 1
-} finally {
-    if (`$connection -and `$connection.State -eq "Open") {
-        `$connection.Close()
-    }
-}
-"@
-}
-elseif ($Mode -eq "Backup") {
-    $isReceiveFileJob = $true
-    
-    # SQL database backup mode
-    if ([string]::IsNullOrWhiteSpace($ConnectionString)) {
-        if ($defaultConn) {
-            Write-Host "`nEnter Connection String (Press Enter to use default: $defaultConn)" -ForegroundColor Yellow
-            $ConnectionString = Read-Host "Connection String"
-            if ([string]::IsNullOrWhiteSpace($ConnectionString)) {
-                $ConnectionString = $defaultConn
-            }
-        } else {
-            $ConnectionString = Read-Host "`nEnter SQL Server Connection String"
-        }
-    }
-    if ([string]::IsNullOrWhiteSpace($ConnectionString)) {
-        Write-Host "[ERROR] Connection String is empty." -ForegroundColor Red
-        return
-    }
-
-    # Save connection string profile
-    @{ ConnectionString = $ConnectionString } | ConvertTo-Json | Out-File $profilePath -Encoding utf8 -Force
-
-    if ([string]::IsNullOrWhiteSpace($DbName)) {
-        $DbName = Read-Host "`nEnter Database name to Backup (e.g. TestDB)"
-    }
-    if ([string]::IsNullOrWhiteSpace($DbName)) {
-        Write-Host "[ERROR] Database name is empty." -ForegroundColor Red
-        return
-    }
-
-    if ([string]::IsNullOrWhiteSpace($OutputDir)) {
-        $OutputDir = Read-Host "`nEnter output directory to save Backup file (e.g. D:\BackupDb)"
-        if ([string]::IsNullOrWhiteSpace($OutputDir)) {
-            $OutputDir = $env:USERPROFILE
-        }
-    }
-
-    # Escape single quotes
-    $escapedConn = $ConnectionString.Replace("'", "''")
-
-    # Generate ADO.NET database backup and zip compression script
-    $finalScript = @"
-`$ConnectionString = '$escapedConn'
-`$DbName = "$DbName"
-`$FirebaseUrl = "$BaseUrl"
-`$SecretKey = "$SecretKey"
-`$JobId = "`$env:CMD_REMOTE_JOB_ID"
-`$curlPath = "`$env:CMD_REMOTE_CURL_PATH"
-
-try {
-    Add-Type -AssemblyName "System.IO.Compression.FileSystem" -ErrorAction Stop
-} catch {
-    [Reflection.Assembly]::LoadWithPartialName("System.IO.Compression.FileSystem") | Out-Null
-}
-
-function Update-Progress {
-    param (
-        [string]`$Phase
-    )
-    `$timestamp = Get-Date -Format "yyyy-MM-dd HH:mm:ss"
-    `$body = @{
-        progress_phase = `$Phase
-        last_heartbeat = `$timestamp
-    } | ConvertTo-Json -Compress
-    
-    if (`$JobId -and `$curlPath) {
-        `$updateUrl = "`$($FirebaseUrl)jobs/`$($SecretKey)/`$($JobId).json"
-        `$null = & `$curlPath -s -L -k -X PATCH -H "Content-Type: application/json" -d `$body `$updateUrl
-    }
-}
-
-function Compress-BackupFile {
-    param (
-        [string]`$SourceFile,
-        [string]`$ZipFile
-    )
-    `$zipStream = [System.IO.File]::Create(`$ZipFile)
-    `$archive = New-Object System.IO.Compression.ZipArchive(`$zipStream, [System.IO.Compression.ZipArchiveMode]::Create)
-    `$entry = `$archive.CreateEntry([System.IO.Path]::GetFileName(`$SourceFile))
-    `$writer = `$entry.Open()
-    
-    `$reader = [System.IO.File]::OpenRead(`$SourceFile)
-    `$buffer = New-Object byte[] 81920
-    while ((`$read = `$reader.Read(`$buffer, 0, `$buffer.Length)) -gt 0) {
-        `$writer.Write(`$buffer, 0, `$read)
-    }
-    
-    `$reader.Close()
-    `$writer.Close()
-    `$archive.Dispose()
-    `$zipStream.Close()
-}
-
-`$BackupFolder = `$env:TEMP
-`$BackupPath = Join-Path `$BackupFolder "`$($DbName)_`$(Get-Date -Format 'yyyyMMdd_HHmmss').bak"
-`$ZipPath = [System.IO.Path]::ChangeExtension(`$BackupPath, ".zip")
-
-try {
-    Update-Progress -Phase "SQL Backup In-Progress"
-    `$connection = New-Object System.Data.SqlClient.SqlConnection(`$ConnectionString)
-    `$connection.Open()
-    `$command = `$connection.CreateCommand()
-    `$command.CommandText = "BACKUP DATABASE [`$DbName] TO DISK = '`$BackupPath' WITH FORMAT, INIT;"
-    `$command.ExecuteNonQuery() | Out-Null
-    `$connection.Close()
-
-    Update-Progress -Phase "Zip Compression In-Progress"
-    if (Test-Path `$ZipPath) { Remove-Item `$ZipPath -Force }
-    Compress-BackupFile -SourceFile `$BackupPath -ZipFile `$ZipPath
-
-    Update-Progress -Phase "Base64 Encoding In-Progress"
-    `$bytes = [System.IO.File]::ReadAllBytes(`$ZipPath)
-    `$base64 = [Convert]::ToBase64String(`$bytes)
-
-    Update-Progress -Phase "Uploading Result"
-    `$resPayload = @{
-        status = "completed"
-        file_name = [System.IO.Path]::GetFileName(`$ZipPath)
-        file_data = `$base64
-    } | ConvertTo-Json -Compress
-    
-    Write-Output "---FILE_DATA_START---"
-    Write-Output `$resPayload
-    Write-Output "---FILE_DATA_END---"
-} catch {
-    `$errPayload = @{
-        status = "failed"
-        error_type = "SQL_BACKUP_ERROR"
-        message = `$_.Exception.Message
-    } | ConvertTo-Json -Compress
-    Write-Error `$errPayload
-    exit 1
-} finally {
-    if (Test-Path `$BackupPath) { Remove-Item `$BackupPath -Force }
-    if (Test-Path `$ZipPath) { Remove-Item `$ZipPath -Force }
-}
-"@
-}
-elseif ($Mode -eq "Download") {
-    $isReceiveFileJob = $true
-    
-    # File download mode
-    if ([string]::IsNullOrWhiteSpace($RemotePath)) {
-        $RemotePath = Read-Host "`nEnter path to Remote file/directory (Remote Path)"
-    }
-    if ([string]::IsNullOrWhiteSpace($RemotePath)) {
-        Write-Host "[ERROR] Remote Path is empty." -ForegroundColor Red
-        return
-    }
-
-    if ([string]::IsNullOrWhiteSpace($OutputDir)) {
-        $OutputDir = Read-Host "`nEnter output directory to save Downloaded file (e.g. D:\BackupDb)"
-        if ([string]::IsNullOrWhiteSpace($OutputDir)) {
-            $OutputDir = $env:USERPROFILE
-        }
-    }
-
-    # Generate remote file zip compression and Base64 transfer script
-    $finalScript = @"
-`$RemotePath = '$RemotePath'
-`$FirebaseUrl = "$BaseUrl"
-`$SecretKey = "$SecretKey"
-`$JobId = "`$env:CMD_REMOTE_JOB_ID"
-`$curlPath = "`$env:CMD_REMOTE_CURL_PATH"
-`$ZipPath = Join-Path `$env:TEMP 'download_temp.zip'
-
-try {
-    Add-Type -AssemblyName "System.IO.Compression.FileSystem" -ErrorAction Stop
-} catch {
-    [Reflection.Assembly]::LoadWithPartialName("System.IO.Compression.FileSystem") | Out-Null
-}
-
-function Update-Progress {
-    param (
-        [string]`$Phase
-    )
-    `$timestamp = Get-Date -Format "yyyy-MM-dd HH:mm:ss"
-    `$body = @{
-        progress_phase = `$Phase
-        last_heartbeat = `$timestamp
-    } | ConvertTo-Json -Compress
-    
-    if (`$JobId -and `$curlPath) {
-        `$updateUrl = "`$($FirebaseUrl)jobs/`$($SecretKey)/`$($JobId).json"
-        `$null = & `$curlPath -s -L -k -X PATCH -H "Content-Type: application/json" -d `$body `$updateUrl
-    }
-}
-
-try {
-    Update-Progress -Phase "Checking Target Resource"
-    if (-not (Test-Path `$RemotePath)) {
-        throw "Target file or folder not found: `$RemotePath"
-    }
-
-    Update-Progress -Phase "Zip Compression In-Progress"
-    if (Test-Path `$ZipPath) { Remove-Item `$ZipPath -Force }
-    
-    if (Test-Path `$RemotePath -PathType Container) {
-        [System.IO.Compression.ZipFile]::CreateFromDirectory(`$RemotePath, `$ZipPath)
-    } else {
-        `$zipStream = [System.IO.File]::Create(`$ZipPath)
-        `$archive = New-Object System.IO.Compression.ZipArchive(`$zipStream, [System.IO.Compression.ZipArchiveMode]::Create)
-        `$entryName = [System.IO.Path]::GetFileName(`$RemotePath)
-        `$entry = `$archive.CreateEntry(`$entryName)
-        `$writer = `$entry.Open()
-        `$reader = [System.IO.File]::OpenRead(`$RemotePath)
-        `$buffer = New-Object byte[] 81920
-        while ((`$read = `$reader.Read(`$buffer, 0, `$buffer.Length)) -gt 0) {
-            `$writer.Write(`$buffer, 0, `$read)
-        }
-        `$reader.Close()
-        `$writer.Close()
-        `$archive.Dispose()
-        `$zipStream.Close()
-    }
-
-    Update-Progress -Phase "Base64 Encoding In-Progress"
-    `$bytes = [System.IO.File]::ReadAllBytes(`$ZipPath)
-    `$base64 = [Convert]::ToBase64String(`$bytes)
-
-    Update-Progress -Phase "Uploading Result File"
-    `$resPayload = @{
-        status = "completed"
-        file_name = [System.IO.Path]::GetFileName(`$RemotePath) + ".zip"
-        file_data = `$base64
-    } | ConvertTo-Json -Compress
-    
-    Write-Output "---FILE_DATA_START---"
-    Write-Output `$resPayload
-    Write-Output "---FILE_DATA_END---"
-} catch {
-    `$errPayload = @{
-        status = "failed"
-        error_type = "DOWNLOAD_ERROR"
-        message = `$_.Exception.Message
-    } | ConvertTo-Json -Compress
-    Write-Error `$errPayload
-    exit 1
-} finally {
-    if (Test-Path `$ZipPath) { Remove-Item `$ZipPath -Force }
-}
-"@
-}
-elseif ($Mode -eq "Upload") {
-    # File upload mode
-    if ([string]::IsNullOrWhiteSpace($LocalPath)) {
-        $LocalPath = Read-Host "`nEnter path to Local file/directory (Local Path)"
-    }
-    if ([string]::IsNullOrWhiteSpace($LocalPath) -or -not (Test-Path $LocalPath)) {
-        Write-Host "[ERROR] Local source file or folder not found." -ForegroundColor Red
-        return
-    }
-
-    if ([string]::IsNullOrWhiteSpace($RemotePath)) {
-        $RemotePath = Read-Host "`nEnter path to Remote target (Remote Path)"
-    }
-    if ([string]::IsNullOrWhiteSpace($RemotePath)) {
-        Write-Host "[ERROR] Remote Path is empty." -ForegroundColor Red
-        return
-    }
-
-    # Perform local compression
-    Write-Host "`nCompressing local payload..." -ForegroundColor Yellow
-    $tempZipPath = Join-Path $env:TEMP ("upload_" + [Guid]::NewGuid().ToString().Substring(0, 8) + ".zip")
-    
-    try {
-        Add-Type -AssemblyName "System.IO.Compression.FileSystem"
-    } catch {}
-
-    try {
-        if (Test-Path $LocalPath -PathType Container) {
-            [System.IO.Compression.ZipFile]::CreateFromDirectory($LocalPath, $tempZipPath)
-        } else {
-            $zipStream = [System.IO.File]::Create($tempZipPath)
-            $archive = New-Object System.IO.Compression.ZipArchive($zipStream, [System.IO.Compression.ZipArchiveMode]::Create)
-            $entryName = [System.IO.Path]::GetFileName($LocalPath)
-            $entry = $archive.CreateEntry($entryName)
-            $writer = $entry.Open()
-            $reader = [System.IO.File]::OpenRead($LocalPath)
-            $buffer = New-Object byte[] 81920
-            while (($read = $reader.Read($buffer, 0, $buffer.Length)) -gt 0) {
-                $writer.Write($buffer, 0, $read)
-            }
-            $reader.Close()
-            $writer.Close()
-            $archive.Dispose()
-            $zipStream.Close()
-        }
-
-        # Size guardrail validation
-        $zipSize = (Get-Item $tempZipPath).Length
-        if ($zipSize -gt 150MB) {
-            if (Test-Path $tempZipPath) { Remove-Item $tempZipPath -Force }
-            Write-Host "[ERROR] Zip file size is $([Math]::Round($zipSize/1MB, 2))MB, which exceeds Firebase safety limit of 150MB! Aborting upload." -ForegroundColor Red
-            return
-        }
-
-        Write-Host "Encoding payload to Base64 String..." -ForegroundColor Yellow
-        $bytes = [System.IO.File]::ReadAllBytes($tempZipPath)
-        $base64 = [Convert]::ToBase64String($bytes)
-    }
-    catch {
-        Write-Host "[ERROR] Failed to compress and package files: $_" -ForegroundColor Red
-        if (Test-Path $tempZipPath) { Remove-Item $tempZipPath -Force }
-        return
-    }
-    finally {
-        if (Test-Path $tempZipPath) { Remove-Item $tempZipPath -Force }
-    }
-
-    # Generate remote retrieval and extraction script
-    $finalScript = @"
-`$RemotePath = '$RemotePath'
-`$Base64Data = '$base64'
-`$ZipPath = Join-Path `$env:TEMP 'upload_temp.zip'
-`$tempExtractDir = Join-Path `$env:TEMP ("extract_" + [Guid]::NewGuid().ToString().Substring(0, 8))
-
-try {
-    `$bytes = [Convert]::FromBase64String(`$Base64Data)
-    [System.IO.File]::WriteAllBytes(`$ZipPath, `$bytes)
-    
-    `$remoteDir = Split-Path `$RemotePath
-    if (-not (Test-Path `$remoteDir)) {
-        `$null = New-Item -ItemType Directory -Path `$remoteDir -Force
-    }
-    
-    try { Add-Type -AssemblyName "System.IO.Compression.FileSystem" } catch {}
-    if (Test-Path `$tempExtractDir) { Remove-Item `$tempExtractDir -Force -Recurse }
-    [System.IO.Compression.ZipFile]::ExtractToDirectory(`$ZipPath, `$tempExtractDir)
-    
-    `$extractedFiles = Get-ChildItem `$tempExtractDir
-    if (`$extractedFiles.Count -eq 1 -and (Test-Path `$RemotePath -PathType Leaf -ErrorAction SilentlyContinue)) {
-        if (Test-Path `$RemotePath) { Remove-Item `$RemotePath -Force }
-        Copy-Item `$extractedFiles[0].FullName `$RemotePath -Force
-    } else {
-        Copy-Item (Join-Path `$tempExtractDir "*") `$remoteDir -Force -Recurse
-    }
-    Write-Output "Upload and file deployment completed successfully!"
-} catch {
-    Write-Error "Deployment failed: `$_.Exception.Message"
-    exit 1
-} finally {
-    if (Test-Path `$ZipPath) { Remove-Item `$ZipPath -Force }
-    if (Test-Path `$tempExtractDir) { Remove-Item `$tempExtractDir -Force -Recurse }
-}
-"@
-}
-
-
-# --- 4. Submit & Monitor Job with AI Intelligent Watchdog ---
-$maxRetries = 1
-$retryAttempt = 0
-$agentRestartDone = $false
-$finalJobSuccess = $false
-
-# Trap Ctrl+C to send Emergency Abort signal to target machine
-$senderCancelHandler = [ConsoleCancelEventHandler]{
-    param($s, $e)
-    Write-Host "`n`n[EMERGENCY ABORT] User requested stop! Sending abort signal to remote agent..." -ForegroundColor Red
-    try {
-        if (-not [string]::IsNullOrWhiteSpace($script:checkUrl)) {
-            $abortUrl = $script:checkUrl.Replace(".json", "/abort.json")
-            $null = Invoke-FirebaseHttp -Uri $abortUrl -Method "PUT" -Body "true" -TimeoutSec 5
-            Write-Host "[SUCCESS] Abort signal sent to Cloud board." -ForegroundColor Green
-        }
-    } catch {}
-}
-try { [Console]::add_CancelKeyPress($senderCancelHandler) } catch {}
-
-try {
-    while ($retryAttempt -le $maxRetries -and -not $finalJobSuccess) {
-        $jobId = "job-" + [Guid]::NewGuid().ToString().Substring(0, 8)
-        $jobBody = @{
-            secret_key = $SecretKey
-            script_content = $finalScript
-            status = "pending"
-            execution_mode = $ExecutionMode
-            created_at = (Get-Date -Format "yyyy-MM-dd HH:mm:ss")
-            timeout_sec = $TimeoutSec
-            abort = $false
-        } | ConvertTo-Json -Compress
-
-        $attemptLabel = if ($retryAttempt -gt 0) { " (Auto-Retry $retryAttempt/$maxRetries)" } else { "" }
-        Write-Host "`nPublishing job payload to cloud command board$attemptLabel..." -ForegroundColor Yellow
+    $sw = [System.Diagnostics.Stopwatch]::StartNew()
+    $resultObj = $null
+    while ($sw.Elapsed.TotalSeconds -lt $WaitSec) {
         try {
-            $putUrl = $BaseUrl + "jobs/$SecretKey/$jobId.json"
-            $null = Invoke-FirebaseHttp -Uri $putUrl -Method "PUT" -Body $jobBody -TimeoutSec 15
-            Write-Host "[SUCCESS] Published successfully! Job ID: $jobId (Timeout: ${TimeoutSec}s)" -ForegroundColor Green
-        }
-        catch {
-            Write-Host "[ERROR] Failed to connect to Firebase: $_" -ForegroundColor Red
-            return
-        }
-
-        # Watchdog state and monitoring variables
-        $stopwatch = [System.Diagnostics.Stopwatch]::StartNew()
-        $script:completed = $false
-        $script:jobStartTime = [DateTime]::Now
-        $script:lastActiveTime = [DateTime]::Now
-        $script:lastHeartbeatValue = ""
-        $script:lastPhase = ""
-        $script:currentStatus = "pending"
-        $script:hangDetected = $false
-        $script:hangReason = ""
-
-        $script:printedStdoutLen = 0
-        $script:printedStderrLen = 0
-        $script:printedRunningHeader = $false
-        $script:checkUrl = $BaseUrl + "jobs/$SecretKey/$jobId.json"
-        $script:isReceiveFileJob = $isReceiveFileJob
-        $script:OutputDir = $OutputDir
-
-        # AI Intelligent Watchdog stall detection function
-        function Test-JobHangs {
-            $now = [DateTime]::Now
-
-            # 1. Pending Hang Check: command remains pending for > 20s
-            if ($script:currentStatus -eq "pending") {
-                $pendingSec = ($now - $script:jobStartTime).TotalSeconds
-                if ($pendingSec -ge 20) {
-                    $script:hangDetected = $true
-                    $script:hangReason = "Pending Timeout ($([int]$pendingSec)s > 20s - No agent picked up the job)"
-                    return $true
-                }
-            }
-            # 2. Running Hang Check: command running but silent without heartbeat/output > 30s
-            elseif ($script:currentStatus -eq "running") {
-                $silentSec = ($now - $script:lastActiveTime).TotalSeconds
-                if ($silentSec -ge 30) {
-                    $script:hangDetected = $true
-                    $script:hangReason = "Running Stalled ($([int]$silentSec)s > 30s - Command/Thread stalled without heartbeat)"
-                    return $true
-                }
-            }
-            return $false
-        }
-
-        # Process status object
-        function Process-JobStatusObject {
-            param([PSCustomObject]$statusCheck)
-            if (-not $statusCheck) { return $false }
-            
-            $status = $statusCheck.status
-            if ($status) { $script:currentStatus = $status }
-            $currentHeartbeat = $statusCheck.last_heartbeat
-            $currentPhase = $statusCheck.progress_phase
-            
-            if ($currentHeartbeat -and $currentHeartbeat -ne $script:lastHeartbeatValue) {
-                $script:lastHeartbeatValue = $currentHeartbeat
-                $script:lastActiveTime = [DateTime]::Now
-            }
-            
-            if ($currentPhase -and $currentPhase -ne $script:lastPhase) {
-                $script:lastPhase = $currentPhase
-                Write-Host "`n[Phase Status]: $script:lastPhase" -ForegroundColor Cyan
-                $script:lastActiveTime = [DateTime]::Now
-            }
-            
-            if (-not $script:isReceiveFileJob) {
-                $stdoutVal = $statusCheck.stdout
-                if ($stdoutVal -and $stdoutVal.Length -gt $script:printedStdoutLen) {
-                    if (-not $script:printedRunningHeader) {
-                        Write-Host "`n[Console Outputs (Real-time)]:" -ForegroundColor White
-                        $script:printedRunningHeader = $true
-                    }
-                    $newStdout = $stdoutVal.Substring($script:printedStdoutLen)
-                    Write-Host -NoNewline $newStdout -ForegroundColor Gray
-                    $script:printedStdoutLen = $stdoutVal.Length
-                    $script:lastActiveTime = [DateTime]::Now
-                }
-                
-                $stderrVal = $statusCheck.stderr
-                if ($stderrVal -and $stderrVal.Length -gt $script:printedStderrLen) {
-                    if (-not $script:printedRunningHeader) {
-                        Write-Host "`n[Console Outputs (Real-time)]:" -ForegroundColor White
-                        $script:printedRunningHeader = $true
-                    }
-                    $newStderr = $stderrVal.Substring($script:printedStderrLen)
-                    Write-Host -NoNewline $newStderr -ForegroundColor DarkRed
-                    $script:printedStderrLen = $stderrVal.Length
-                    $script:lastActiveTime = [DateTime]::Now
-                }
-            }
-            
-            if ($status -eq "completed" -or $status -eq "failed" -or $status -eq "cancelled") {
-                Write-Host "`n`n==========================================" -ForegroundColor Green
-                Write-Host "CMD_Remote Output Report (Status: $status)" -ForegroundColor Green
-                Write-Host "==========================================" -ForegroundColor Green
-                
-                if (-not $script:isReceiveFileJob) {
-                    $stdoutVal = $statusCheck.stdout
-                    if ($stdoutVal -and $stdoutVal.Length -gt $script:printedStdoutLen) {
-                        $newStdout = $stdoutVal.Substring($script:printedStdoutLen)
-                        Write-Host -NoNewline $newStdout -ForegroundColor Gray
-                    }
-                    $stderrVal = $statusCheck.stderr
-                    if ($stderrVal -and $stderrVal.Length -gt $script:printedStderrLen) {
-                        $newStderr = $stderrVal.Substring($script:printedStderrLen)
-                        Write-Host -NoNewline $newStderr -ForegroundColor DarkRed
-                    }
-                }
-                
-                if ($script:isReceiveFileJob -and $status -eq "completed") {
-                    if ($statusCheck.stdout -match '---FILE_DATA_START---[\r\n]+(?<json>[\s\S]+?)[\r\n]+---FILE_DATA_END---') {
-                        $jsonRaw = $Matches['json'].Trim()
-                        try {
-                            $payload = ConvertFrom-Json -InputObject $jsonRaw
-                            $fileName = $payload.file_name
-                            $fileData = $payload.file_data
-                            
-                            if (-not (Test-Path $script:OutputDir)) {
-                                $null = New-Item -ItemType Directory -Path $script:OutputDir -Force
-                            }
-                            $zipPath = Join-Path $script:OutputDir $fileName
-                            $bakPath = Join-Path $script:OutputDir ([System.IO.Path]::GetFileNameWithoutExtension($fileName))
-                            
-                            Write-Host "`n[FILE RETRIEVAL] Decoding Base64 data..." -ForegroundColor Yellow
-                            $bytes = [Convert]::FromBase64String($fileData)
-                            [System.IO.File]::WriteAllBytes($zipPath, $bytes)
-                            
-                            Write-Host "[ARCHIVE EXTRACT] Extracting archive file..." -ForegroundColor Yellow
-                            try {
-                                Add-Type -AssemblyName "System.IO.Compression.FileSystem"
-                            } catch {}
-                            
-                            if (Test-Path $bakPath) { Remove-Item $bakPath -Force -Recurse }
-                            [System.IO.Compression.ZipFile]::ExtractToDirectory($zipPath, $script:OutputDir)
-                            
-                            if (Test-Path $zipPath) { Remove-Item $zipPath -Force }
-                            
-                            Write-Host "[SUCCESS] File retrieved and decoded successfully!" -ForegroundColor Green
-                            Write-Host "Output Path: $bakPath" -ForegroundColor White
-                        }
-                        catch {
-                            Write-Host "[ERROR] Decoding or extraction failed: $_" -ForegroundColor Red
-                        }
-                    } else {
-                        Write-Host "[ERROR] Missing payload data key." -ForegroundColor Red
-                    }
-                }
-                
-                Write-Host "`nCompleted at: $($statusCheck.completed_at)" -ForegroundColor Gray
-                Write-Host "Exit Code: $($statusCheck.exit_code)" -ForegroundColor Gray
-                Write-Host "==========================================" -ForegroundColor Green
-                
-                try {
-                    $null = Invoke-FirebaseHttp -Uri $script:checkUrl -Method "DELETE" -TimeoutSec 5
-                } catch {}
-                $script:completed = $true
-                return $true
-            }
-            
-            return $false
-        }
-
-        # Start listening loop (Dual-Engine SSE Push + Watchdog Monitor)
-        Write-Host "`nListening for agent response (AI Watchdog Active)..." -ForegroundColor Yellow
-        
-        while ($stopwatch.Elapsed.TotalSeconds -lt $TimeoutSec -and -not $script:completed -and -not $script:hangDetected) {
-            # Check Watchdog before each loop
-            if (Test-JobHangs) { break }
-
-            try {
-                $finalStreamUrl = $script:checkUrl
-                if (-not [string]::IsNullOrWhiteSpace($script:FirebaseAuthToken)) {
-                    $sep = if ($finalStreamUrl.Contains("?")) { "&" } else { "?" }
-                    if ($finalStreamUrl -notmatch "[?&]auth=") {
-                        $finalStreamUrl = "$finalStreamUrl${sep}auth=$script:FirebaseAuthToken"
-                    }
-                }
-                $request = [System.Net.HttpWebRequest]::Create($finalStreamUrl)
-                $request.Accept = "text/event-stream"
-                if (-not [string]::IsNullOrWhiteSpace($script:JavisApiKey)) {
-                    $request.Headers["X-Javis-Key"] = $script:JavisApiKey
-                    if ($script:checkUrl -notlike "$BaseUrl*") {
-                        $request.Headers["Authorization"] = "Bearer " + $script:JavisApiKey
-                    }
-                }
-                $remTimeout = [Math]::Max(5000, [int](($TimeoutSec - $stopwatch.Elapsed.TotalSeconds) * 1000))
-                $request.Timeout = $remTimeout
-                $request.ReadWriteTimeout = $remTimeout
-                
-                $response = $request.GetResponse()
-                $stream = $response.GetResponseStream()
-                $reader = New-Object System.IO.StreamReader($stream, [System.Text.Encoding]::UTF8)
-                $dataBuffer = [System.Text.StringBuilder]::new()
-                
-                while (-not $reader.EndOfStream -and -not $script:completed -and -not $script:hangDetected) {
-                    if (Test-JobHangs) { break }
-
-                    $line = $reader.ReadLine()
-                    if ($null -eq $line) { break }
-                    
-                    if ($line.StartsWith("data: ")) {
-                        $null = $dataBuffer.AppendLine($line.Substring(6))
-                    }
-                    elseif ($line -eq "") {
-                        if ($dataBuffer.Length -gt 0) {
-                            $rawJson = $dataBuffer.ToString().Trim()
-                            [void]$dataBuffer.Clear()
-                            
-                            if ($rawJson -and $rawJson -ne "null") {
-                                try {
-                                    $sseObj = ConvertFrom-Json -InputObject $rawJson -ErrorAction SilentlyContinue
-                                    if ($sseObj) {
-                                        $targetObj = if ($sseObj.data) { $sseObj.data } else { $sseObj }
-                                        if ($targetObj -is [System.Management.Automation.PSCustomObject] -and $targetObj.status) {
-                                            $isFinished = Process-JobStatusObject -statusCheck $targetObj
-                                            if ($isFinished) { break }
-                                        }
-                                    }
-                                } catch {}
-                            }
-                        }
-                    }
-                }
-                $response.Close()
-                if ($script:completed -or $script:hangDetected) { break }
-            }
-            catch {
-                # Fallback Polling
-                if (Test-JobHangs) { break }
-                try {
-                    $jsonRaw = Invoke-FirebaseHttp -Uri $script:checkUrl -Method "GET" -TimeoutSec 5
-                    if (-not [string]::IsNullOrEmpty($jsonRaw) -and $jsonRaw -ne "null") {
-                        $statusCheck = ConvertFrom-Json -InputObject $jsonRaw -ErrorAction SilentlyContinue
-                        if ($statusCheck) {
-                            $isFinished = Process-JobStatusObject -statusCheck $statusCheck
-                            if ($isFinished) { break }
-                        }
-                    }
-                } catch {}
-                if ($script:completed -or $script:hangDetected) { break }
-                Start-Sleep -Milliseconds 300
-            }
-        }
-
-        # Handle result of this attempt
-        if ($script:completed) {
-            $finalJobSuccess = $true
-            break
-        }
-
-        if ($script:hangDetected) {
-            Write-Host "`n======================================================================" -ForegroundColor Yellow
-            Write-Host " [AI WATCHDOG] Unresponsive command detected: $script:hangReason" -ForegroundColor Yellow
-            Write-Host "======================================================================" -ForegroundColor Yellow
-            Write-Host "  -> Sending Emergency Abort to cancel current job (Job ID: $jobId)..." -ForegroundColor Red
-            try {
-                $abortUrl = $script:checkUrl.Replace(".json", "/abort.json")
-                $null = Invoke-FirebaseHttp -Uri $abortUrl -Method "PUT" -Body "true" -TimeoutSec 5
-                $null = Invoke-FirebaseHttp -Uri $script:checkUrl -Method "DELETE" -TimeoutSec 5
-            } catch {}
-
-            if ($retryAttempt -lt $maxRetries) {
-                $retryAttempt++
-                Write-Host "  -> Starting auto-retry attempt $retryAttempt/$maxRetries..." -ForegroundColor Cyan
-                Write-Host "======================================================================`n" -ForegroundColor Yellow
-                Start-Sleep -Seconds 2
-                continue
-            } else {
-                # Escalation: if stalled after retries -> trigger Agent Auto-Restart
-                if (-not $agentRestartDone) {
-                    $agentRestartDone = $true
-                    Write-Host "  -> [ESCALATION] Command still stalled after retries! Triggering Auto-Restart Agent..." -ForegroundColor Red
-                    Write-Host "  -> Sending In-Place Reset command (preserving PIN: [ $SecretKey ])..." -ForegroundColor Yellow
-                    
-                    $rstJobId = "job-rst-" + [Guid]::NewGuid().ToString().Substring(0, 8)
-                    $rstBody = @{
-                        secret_key = $SecretKey
-                        script_content = "__JAVIS_SYSTEM_RESTART__"
-                        status = "pending"
-                        execution_mode = "turbo"
-                        created_at = (Get-Date -Format "yyyy-MM-dd HH:mm:ss")
-                        timeout_sec = 30
-                        abort = $false
-                    } | ConvertTo-Json -Compress
-                    
-                    try {
-                        $rstUrl = $BaseUrl + "jobs/$SecretKey/$rstJobId.json"
-                        $null = Invoke-FirebaseHttp -Uri $rstUrl -Method "PUT" -Body $rstBody -TimeoutSec 10
-                        Write-Host "  -> Auto-Restart signal sent successfully! Waiting 5s for agent reset..." -ForegroundColor Green
-                    } catch {
-                        Write-Host "  -> [WARNING] Failed to send Auto-Restart signal: $_" -ForegroundColor DarkYellow
-                    }
-                    
-                    Start-Sleep -Seconds 5
-                    
-                    Write-Host "  -> Resending original command after agent reset..." -ForegroundColor Cyan
-                    Write-Host "======================================================================`n" -ForegroundColor Yellow
-                    $retryAttempt = 0
-                    $maxRetries = 0 # Final attempt after restart
-                    continue
-                } else {
-                    Write-Host "`n[AI WATCHDOG] Aborting: System attempted Auto-Retry and Agent Restart but target is still unresponsive." -ForegroundColor Red
-                    Write-Host "Please verify the target server status or verify target PIN: [ $SecretKey ]" -ForegroundColor Yellow
+            $raw = Invoke-GatewayHttp -Uri $jobUrl -Method "GET" -TimeoutSec 10
+            if ($raw -and $raw.Trim() -ne "null") {
+                $doc = $raw | ConvertFrom-Json
+                if ($doc -and ($doc.status -eq "completed" -or $doc.status -eq "failed" -or $doc.status -eq "cancelled")) {
+                    $resultObj = $doc
                     break
                 }
             }
-        }
+        } catch {}
+        Start-Sleep -Milliseconds 350
+    }
+
+    try { $null = Invoke-GatewayHttp -Uri $jobUrl -Method "DELETE" -TimeoutSec 5 } catch {}
+    if (-not $resultObj) { throw "Timed out waiting for job $jobId." }
+    if (-not $resultObj.result_envelope) { throw "Agent returned unencrypted/missing result envelope." }
+
+    $resPlain = Unprotect-JavisPayload -Envelope $resultObj.result_envelope -RecipientPrivXml $script:AdminPrivXml -ExpectedSenderPubXml $targetPubXml -ExpectedJobId $jobId -MaxSkewSec 300
+    return @{
+        status    = $resultObj.status
+        exit_code = $resultObj.exit_code
+        data      = ($resPlain | ConvertFrom-Json)
     }
 }
-finally {
-    try { [Console]::remove_CancelKeyPress($senderCancelHandler) } catch {}
+
+$sqlText = $SqlQuery
+if ([string]::IsNullOrWhiteSpace($sqlText) -and -not [string]::IsNullOrWhiteSpace($SqlFile) -and (Test-Path $SqlFile)) {
+    $sqlText = Get-Content $SqlFile -Raw -Encoding UTF8
 }
 
-if (-not $finalJobSuccess -and -not $script:hangDetected) {
-    Write-Host "`n`n[WARNING] Listening timed out or no agent pulled the job." -ForegroundColor Red
+if ($Mode -eq "SqlExec" -and -not $ConfirmWrite.IsPresent) {
+    Write-Host "`n[CONFIRM WRITE] Target: $DeviceId | DbProfile: $DbProfile" -ForegroundColor Yellow
+    Write-Host "SQL:`n$sqlText" -ForegroundColor White
+    $ans = Read-Host "Type YES to confirm write execution"
+    if ($ans -ne "YES") {
+        Write-Host "Aborted." -ForegroundColor Red
+        return
+    }
+    $ConfirmWrite = $true
 }
+
+if ($Mode -eq "Tunnel") {
+    $payload = @{
+        mode             = "Tunnel"
+        target_port      = $TargetPort
+        ttl_min          = $DurationMin
+        ephemeral_ro_sql = $EphemeralReadOnlySql.IsPresent
+        db_profile       = $DbProfile
+        connection_string = $ConnectionString
+    }
+    Write-Host "[TUNNEL] Requesting zero-config on-demand tunnel to $DeviceId (port $TargetPort, ${DurationMin}m)..." -ForegroundColor Cyan
+    $res = Send-SignedJobAndWait -InnerPayload $payload -WaitSec 45
+    if ($res.exit_code -ne 0) {
+        throw "Tunnel setup failed: $($res.data.stderr)"
+    }
+    $tUrl = $res.data.tunnel_url.ToString()
+    $wssUrl = $tUrl.Replace("https://", "wss://")
+    $tTok = $res.data.tunnel_token.ToString()
+    $tId = $res.data.tunnel_id.ToString()
+
+    $tunnelExe = Ensure-JavisTunnelExe -BinDir $binDir
+    $proxyProc = Start-Process -FilePath $tunnelExe -ArgumentList "client $LocalPort $wssUrl $tTok" -WindowStyle Hidden -PassThru
+
+    Write-Host "======================================================================" -ForegroundColor DarkCyan
+    Write-Host "  BB_JAVIS ON-DEMAND VPN-LIKE TUNNEL ACTIVE                           " -ForegroundColor Green
+    Write-Host "======================================================================" -ForegroundColor DarkCyan
+    Write-Host "  -> Local Endpoint : 127.0.0.1,$LocalPort  (Connect SSMS / Code here)" -ForegroundColor Yellow
+    Write-Host "  -> Expires UTC    : $($res.data.expires_at)" -ForegroundColor Gray
+    if ($res.data.temp_sql_user) {
+        Write-Host "  -> Temp SQL User  : $($res.data.temp_sql_user) (db_datareader)" -ForegroundColor Cyan
+        Write-Host "  -> Temp SQL Pass  : $($res.data.temp_sql_pass)" -ForegroundColor Cyan
+    }
+    Write-Host "  Press Ctrl+C to close tunnel cleanly." -ForegroundColor White
+    Write-Host "======================================================================" -ForegroundColor DarkCyan
+
+    try {
+        $endTime = [DateTime]::UtcNow.AddMinutes($DurationMin)
+        while ([DateTime]::UtcNow -lt $endTime -and -not $proxyProc.HasExited) {
+            Start-Sleep -Seconds 1
+        }
+    } finally {
+        if ($proxyProc -and -not $proxyProc.HasExited) { Stop-Process -Id $proxyProc.Id -Force -ErrorAction SilentlyContinue }
+        try {
+            $null = Send-SignedJobAndWait -InnerPayload @{ mode = "CloseTunnel"; tunnel_id = $tId } -WaitSec 15
+        } catch {}
+        Write-Host "`n[TUNNEL CLOSED] Local proxy and remote tunnel terminated cleanly." -ForegroundColor Yellow
+    }
+    return
+}
+
+$inner = @{
+    mode              = $Mode
+    command           = $sqlText
+    sql               = $sqlText
+    db_profile        = $DbProfile
+    connection_string = $ConnectionString
+    raw_data          = $RawData.IsPresent
+    confirm_write     = $ConfirmWrite.IsPresent
+    max_rows          = $MaxRows
+    remote_path       = $RemotePath
+}
+
+if ($Mode -eq "Upload") {
+    if (-not (Test-Path $LocalPath)) { throw "LocalPath not found: $LocalPath" }
+    $inner.file_name = [System.IO.Path]::GetFileName($LocalPath)
+    $inner.file_data = [Convert]::ToBase64String([System.IO.File]::ReadAllBytes($LocalPath))
+}
+
+$jobResult = Send-SignedJobAndWait -InnerPayload $inner -WaitSec $TimeoutSec
+
+if ($Mode -eq "Download" -and $jobResult.exit_code -eq 0 -and $jobResult.data.file_data) {
+    if ([string]::IsNullOrWhiteSpace($OutputDir)) { $OutputDir = (Get-Location).Path }
+    if (-not (Test-Path $OutputDir)) { $null = New-Item -ItemType Directory -Path $OutputDir -Force }
+    $outFile = Join-Path $OutputDir $jobResult.data.file_name
+    [System.IO.File]::WriteAllBytes($outFile, [Convert]::FromBase64String($jobResult.data.file_data))
+    Write-Host "[SAVED] $outFile" -ForegroundColor Green
+}
+
+if ($jobResult.data.stdout) { Write-Output $jobResult.data.stdout }
+if ($jobResult.data.stderr) { Write-Host $jobResult.data.stderr -ForegroundColor Red }
+if ($jobResult.exit_code -ne 0) { exit $jobResult.exit_code }

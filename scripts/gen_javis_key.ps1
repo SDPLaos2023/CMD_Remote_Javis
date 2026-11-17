@@ -1,86 +1,127 @@
 <#
 .SYNOPSIS
-    BB_JAVIS Enterprise API Key Generator
-    Generates HMAC-SHA256 Signed API Keys
-
-.DESCRIPTION
-    High-security stateless API Key generator without requiring database queries.
-    Format: bbj_<tenant>_<timestamp>_<signature>
+    BB_JAVIS Enterprise Admin API Key & RSA Identity Generator
+    Generates per-Admin HMAC-SHA256 API Key and DPAPI-protected RSA-2048 keypair.
 #>
 
 [CmdletBinding()]
 param(
-    [string]$Tenant = "sdpuat",
-    [string]$MasterSecret = "JAVIS_SECURE_ENTERPRISE_MASTER_KEY_2026",
+    [string]$Tenant = "sdp",
+    [string]$AdminId = "",
+    [string]$MasterSecret = "",
+    [string]$GatewayUrl = "",
     [switch]$SaveToThisMachine,
     [switch]$CopyToClipboard
 )
 
-# Force UTF-8 Encoding
 $OutputEncoding = [System.Text.Encoding]::UTF8
 [Console]::OutputEncoding = [System.Text.Encoding]::UTF8
 
+$cryptoLib = Join-Path $PSScriptRoot "lib_javis_crypto.ps1"
+if (-not (Test-Path $cryptoLib)) {
+    throw "Missing required library: $cryptoLib"
+}
+. $cryptoLib
+
 Write-Host "======================================================================" -ForegroundColor DarkCyan
-Write-Host "              BB_JAVIS ENTERPRISE API KEY GENERATOR                   " -ForegroundColor Yellow
+Write-Host "         BB_JAVIS ZERO-TRUST ADMIN KEY & IDENTITY GENERATOR           " -ForegroundColor Yellow
 Write-Host "======================================================================" -ForegroundColor DarkCyan
 
-# 1. Clean Tenant name (a-z, 0-9 only)
 $cleanTenant = ($Tenant -replace "[^a-zA-Z0-9]", "").ToLower()
-if ([string]::IsNullOrWhiteSpace($cleanTenant)) {
-    $cleanTenant = "default"
+if ([string]::IsNullOrWhiteSpace($cleanTenant)) { $cleanTenant = "default" }
+
+if ([string]::IsNullOrWhiteSpace($AdminId)) {
+    $AdminId = $env:USERNAME
+}
+$cleanAdmin = ($AdminId -replace "[^a-zA-Z0-9-]", "").ToLower()
+if ([string]::IsNullOrWhiteSpace($cleanAdmin)) { $cleanAdmin = "admin" }
+
+if ([string]::IsNullOrWhiteSpace($MasterSecret)) {
+    if (-not [string]::IsNullOrWhiteSpace($env:BB_JAVIS_MASTER_SECRET)) {
+        $MasterSecret = $env:BB_JAVIS_MASTER_SECRET.Trim()
+    } else {
+        $sec = Read-Host "Enter JAVIS_MASTER_SECRET (min 16 chars)" -AsSecureString
+        $bstr = [System.Runtime.InteropServices.Marshal]::SecureStringToBSTR($sec)
+        try {
+            $MasterSecret = [System.Runtime.InteropServices.Marshal]::PtrToStringAuto($bstr)
+        } finally {
+            [System.Runtime.InteropServices.Marshal]::ZeroFreeBSTR($bstr)
+        }
+    }
 }
 
-# 2. Compute Hex Unix Epoch timestamp
+if ([string]::IsNullOrWhiteSpace($MasterSecret) -or $MasterSecret.Length -lt 16) {
+    throw "MasterSecret must be at least 16 characters."
+}
+
 $unixTime = [int][double]::Parse((Get-Date -UFormat %s))
 $timeHex = $unixTime.ToString("x8")
 
-# 3. Compute HMAC-SHA256 signature
-$payload = "$cleanTenant`:$timeHex"
+$payload = "adm:$cleanTenant`:$cleanAdmin`:$timeHex"
 $hmac = New-Object System.Security.Cryptography.HMACSHA256
-$hmac.Key = [System.Text.Encoding]::UTF8.GetBytes($MasterSecret)
-$hashBytes = $hmac.ComputeHash([System.Text.Encoding]::UTF8.GetBytes($payload))
-$hashHex = ($hashBytes | ForEach-Object { $_.ToString("x2") }) -join ""
-$signature = $hashHex.Substring(0, 32)
+try {
+    $hmac.Key = [System.Text.Encoding]::UTF8.GetBytes($MasterSecret)
+    $hashBytes = $hmac.ComputeHash([System.Text.Encoding]::UTF8.GetBytes($payload))
+    $hashHex = ($hashBytes | ForEach-Object { $_.ToString("x2") }) -join ""
+    $signature = $hashHex.Substring(0, 32)
+} finally {
+    $hmac.Dispose()
+}
 
-# 4. Assemble BB_JAVIS API Key
-$apiKey = "bbj_${cleanTenant}_${timeHex}_${signature}"
+$apiKey = "bbj_adm_${cleanTenant}_${cleanAdmin}_${timeHex}_${signature}"
 
-Write-Host "  -> Tenant Name : " -NoNewline -ForegroundColor Gray
-Write-Host $cleanTenant -ForegroundColor Green
-Write-Host "  -> Created At  : " -NoNewline -ForegroundColor Gray
-Write-Host (Get-Date -Format "yyyy-MM-dd HH:mm:ss") -ForegroundColor White
+Write-Host "  -> Tenant      : $cleanTenant" -ForegroundColor Green
+Write-Host "  -> Admin ID    : $cleanAdmin" -ForegroundColor Cyan
+Write-Host "  -> Created At  : $(Get-Date -Format 'yyyy-MM-dd HH:mm:ss')" -ForegroundColor White
 Write-Host "----------------------------------------------------------------------" -ForegroundColor DarkGray
-Write-Host "  Generated API Key:" -ForegroundColor Cyan
+Write-Host "  Generated Admin API Key:" -ForegroundColor Cyan
 Write-Host "  $apiKey" -ForegroundColor Yellow
 Write-Host "----------------------------------------------------------------------" -ForegroundColor DarkGray
 
-# 5. Optional Clipboard Copy
 if ($CopyToClipboard.IsPresent) {
     try {
         Set-Clipboard -Value $apiKey
-        Write-Host "  [OK] Copied API Key to Windows Clipboard!" -ForegroundColor Green
+        Write-Host "  [OK] Copied Admin API Key to clipboard." -ForegroundColor Green
     } catch {}
 }
 
-# 6. Optional Local Machine Persistence
 if ($SaveToThisMachine.IsPresent) {
     $configDir = Join-Path $env:LOCALAPPDATA "BB_Javis"
     if (-not (Test-Path $configDir)) {
         $null = New-Item -ItemType Directory -Path $configDir -Force
     }
-    $configFile = Join-Path $configDir "config.json"
-    
-    $configData = @{
-        apiKey = $apiKey
-        tenantId = $cleanTenant
-        savedAt = (Get-Date -Format "yyyy-MM-ddTHH:mm:ssZ")
-        generatedBy = "gen_javis_key.ps1"
-    }
-    
-    $json = $configData | ConvertTo-Json -Depth 5
+
     $utf8NoBom = New-Object System.Text.UTF8Encoding($false)
-    [System.IO.File]::WriteAllText($configFile, $json, $utf8NoBom)
-    Write-Host "  [SAVED] Saved API Key to local profile: $configFile" -ForegroundColor Green
+    $privFile = Join-Path $configDir "admin_key.dpapi"
+    $pubFile = Join-Path $configDir "admin_pub.xml"
+
+    if (-not (Test-Path $privFile) -or -not (Test-Path $pubFile)) {
+        $pair = New-JavisRsaKeyPair
+        $encPriv = Protect-JavisLocalSecret -PlainText $pair.PrivateXml -Scope "CurrentUser"
+        [System.IO.File]::WriteAllText($privFile, $encPriv, $utf8NoBom)
+        [System.IO.File]::WriteAllText($pubFile, $pair.PublicXml, $utf8NoBom)
+        Write-Host "  [KEYPAIR] Generated DPAPI-protected RSA-2048 Admin keypair." -ForegroundColor Green
+    }
+
+    $configFile = Join-Path $configDir "config.json"
+    $existingGw = ""
+    if (Test-Path $configFile) {
+        try {
+            $old = Get-Content $configFile -Raw -Encoding UTF8 | ConvertFrom-Json
+            if ($old -and $old.gatewayUrl) { $existingGw = $old.gatewayUrl }
+        } catch {}
+    }
+    $finalGw = if (-not [string]::IsNullOrWhiteSpace($GatewayUrl)) { $GatewayUrl.Trim().TrimEnd('/') + "/" } else { $existingGw }
+
+    $configData = @{
+        apiKey     = $apiKey
+        tenantId   = $cleanTenant
+        adminId    = $cleanAdmin
+        gatewayUrl = $finalGw
+        savedAt    = (Get-Date -Format "yyyy-MM-ddTHH:mm:ssZ")
+    }
+    [System.IO.File]::WriteAllText($configFile, ($configData | ConvertTo-Json -Depth 5), $utf8NoBom)
+    Write-Host "  [SAVED] Admin profile saved to: $configFile" -ForegroundColor Green
 }
 
 Write-Host "======================================================================" -ForegroundColor DarkCyan
