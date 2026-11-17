@@ -426,6 +426,141 @@ function Add-JavisAuditEntry {
     return $entryHash
 }
 
+function Split-JavisSqlStatements {
+    param([string]$Sql)
+    $list = [System.Collections.Generic.List[string]]::new()
+    if ([string]::IsNullOrWhiteSpace($Sql)) { return ,($list.ToArray()) }
+
+    $sb = New-Object System.Text.StringBuilder
+    $inSingleQuote = $false
+    $inLineComment = $false
+    $inBlockComment = $false
+    $len = $Sql.Length
+
+    for ($i = 0; $i -lt $len; $i++) {
+        $ch = $Sql[$i]
+        $next = if ($i + 1 -lt $len) { $Sql[$i + 1] } else { [char]0 }
+
+        if ($inLineComment) {
+            [void]$sb.Append($ch)
+            if ($ch -eq "`n") { $inLineComment = $false }
+            continue
+        }
+        if ($inBlockComment) {
+            [void]$sb.Append($ch)
+            if ($ch -eq '*' -and $next -eq '/') {
+                [void]$sb.Append('/')
+                $i++
+                $inBlockComment = $false
+            }
+            continue
+        }
+        if ($inSingleQuote) {
+            [void]$sb.Append($ch)
+            if ($ch -eq "'" -and $next -eq "'") {
+                [void]$sb.Append("'")
+                $i++
+            } elseif ($ch -eq "'") {
+                $inSingleQuote = $false
+            }
+            continue
+        }
+
+        if ($ch -eq '-' -and $next -eq '-') {
+            [void]$sb.Append("--")
+            $i++
+            $inLineComment = $true
+            continue
+        }
+        if ($ch -eq '/' -and $next -eq '*') {
+            [void]$sb.Append("/*")
+            $i++
+            $inBlockComment = $true
+            continue
+        }
+        if ($ch -eq "'") {
+            [void]$sb.Append($ch)
+            $inSingleQuote = $true
+            continue
+        }
+        if ($ch -eq ';') {
+            $seg = $sb.ToString().Trim()
+            if (-not [string]::IsNullOrWhiteSpace($seg)) { $list.Add($seg) }
+            [void]$sb.Clear()
+            continue
+        }
+        [void]$sb.Append($ch)
+    }
+
+    $tail = $sb.ToString().Trim()
+    if (-not [string]::IsNullOrWhiteSpace($tail)) { $list.Add($tail) }
+    return $list.ToArray()
+}
+
+function Resolve-JavisAutoMode {
+    param(
+        [string]$Text = "",
+        [switch]$HasLocalPort,
+        [switch]$RawData
+    )
+    if ($HasLocalPort.IsPresent) {
+        return @{
+            Mode            = "Tunnel"
+            FallbackMode    = "Query"
+            Statements      = @()
+            RequiresConfirm = $false
+            Reason          = "Explicit local port requested for direct TCP/SSMS access"
+        }
+    }
+
+    $stmts = @(Split-JavisSqlStatements -Sql $Text)
+    if ($stmts.Count -gt 0) {
+        $allReadOnly = $true
+        foreach ($s in $stmts) {
+            if (-not (Test-JavisReadOnlySql -Sql $s)) {
+                $allReadOnly = $false
+                break
+            }
+        }
+        if ($allReadOnly) {
+            if ($stmts.Count -ge 4) {
+                return @{
+                    Mode            = "Tunnel"
+                    FallbackMode    = "Query"
+                    Statements      = $stmts
+                    RequiresConfirm = $false
+                    Reason          = "Batch of $($stmts.Count) read queries (>= 4 threshold); Tunnel preferred with Query fallback"
+                }
+            }
+            return @{
+                Mode            = "Query"
+                FallbackMode    = ""
+                Statements      = $stmts
+                RequiresConfirm = $false
+                Reason          = "1-3 Read-Only SQL queries; Query lane is fastest and enforces PII masking"
+            }
+        }
+
+        if ($Text -match "(?is)^\s*(?:--[^\r\n]*\s+|/\*[\s\S]*?\*/\s*)*(INSERT|UPDATE|DELETE|MERGE|DROP|ALTER|CREATE|TRUNCATE|EXEC|EXECUTE|GRANT|REVOKE|BACKUP|RESTORE)\b") {
+            return @{
+                Mode            = "SqlExec"
+                FallbackMode    = ""
+                Statements      = $stmts
+                RequiresConfirm = $true
+                Reason          = "Write/procedural SQL detected; routing to SqlExec with confirmation gate"
+            }
+        }
+    }
+
+    return @{
+        Mode            = "PowerShell"
+        FallbackMode    = ""
+        Statements      = @()
+        RequiresConfirm = $false
+        Reason          = "Non-SQL command detected; routing to PowerShell"
+    }
+}
+
 # BB_JAVIS Native WebSocket-to-TCP Tunnel Library (Pure ASCII, PowerShell 5.1 / .NET 4.5+)
 
 function Get-JavisCscPath {
@@ -1134,7 +1269,7 @@ if (-not $pairedMap.ContainsKey($DeviceId) -or -not $pairedMap[$DeviceId].device
 $targetPubXml = $pairedMap[$DeviceId].device_pub_key.ToString()
 
 if ([string]::IsNullOrWhiteSpace($Mode)) {
-    $Mode = if (-not [string]::IsNullOrWhiteSpace($SqlQuery) -or -not [string]::IsNullOrWhiteSpace($SqlFile)) { "PowerShell" } else { Read-Host "Enter Mode (PowerShell, Query, SqlExec, Tunnel, Download, Upload)" }
+    $Mode = if (-not [string]::IsNullOrWhiteSpace($SqlQuery) -or -not [string]::IsNullOrWhiteSpace($SqlFile) -or $PSBoundParameters.ContainsKey('LocalPort')) { "Auto" } else { Read-Host "Enter Mode (Auto, PowerShell, Query, SqlExec, Tunnel, Download, Upload)" }
 }
 
 function Send-SignedJobAndWait {
@@ -1188,6 +1323,105 @@ function Send-SignedJobAndWait {
 $sqlText = $SqlQuery
 if ([string]::IsNullOrWhiteSpace($sqlText) -and -not [string]::IsNullOrWhiteSpace($SqlFile) -and (Test-Path $SqlFile)) {
     $sqlText = Get-Content $SqlFile -Raw -Encoding UTF8
+}
+
+$autoStatements = @()
+if ($Mode -eq "Auto") {
+    $decision = Resolve-JavisAutoMode -Text $sqlText -HasLocalPort:($PSBoundParameters.ContainsKey('LocalPort')) -RawData:$RawData.IsPresent
+    Write-Host "[AUTO-MODE] Selected '$($decision.Mode)' - $($decision.Reason)" -ForegroundColor Cyan
+    $Mode = $decision.Mode
+    $autoStatements = @($decision.Statements)
+
+    if ($Mode -eq "Tunnel" -and $autoStatements.Count -ge 4) {
+        $tunnelFallback = $false
+        $hasSqlCred = ($ConnectionString -match "(?i)(User Id|UID|Pwd|Password)\s*=")
+        try {
+            $tPayload = @{
+                mode              = "Tunnel"
+                target_port       = $TargetPort
+                ttl_min           = 5
+                ephemeral_ro_sql  = (-not $hasSqlCred)
+                db_profile        = $DbProfile
+                connection_string = $ConnectionString
+            }
+            $tRes = Send-SignedJobAndWait -InnerPayload $tPayload -WaitSec 45
+            if ($tRes.exit_code -ne 0) { throw $tRes.data.stderr }
+
+            $tUrl = $tRes.data.tunnel_url.ToString()
+            $wssUrl = $tUrl.Replace("https://", "wss://")
+            $tTok = $tRes.data.tunnel_token.ToString()
+            $tId = $tRes.data.tunnel_id.ToString()
+            $tunnelExe = Ensure-JavisTunnelExe -BinDir $binDir
+            $proxyProc = Start-Process -FilePath $tunnelExe -ArgumentList "client $LocalPort $wssUrl $tTok" -WindowStyle Hidden -PassThru
+            try {
+                Start-Sleep -Milliseconds 900
+                $dbNameMatch = if ($ConnectionString -match "(?i)(?:Database|Initial Catalog)\s*=\s*([^;]+)") { $Matches[1].Trim() } else { "master" }
+                $localSqlConnStr = if ($tRes.data.temp_sql_user) {
+                    "Server=127.0.0.1,$LocalPort;Database=$dbNameMatch;User Id=$($tRes.data.temp_sql_user);Password=$($tRes.data.temp_sql_pass);Encrypt=False;TrustServerCertificate=True;"
+                } else {
+                    ($ConnectionString -replace "(?i)(Server|Data Source)\s*=\s*[^;]+", "Server=127.0.0.1,$LocalPort") + ";Encrypt=False;TrustServerCertificate=True;"
+                }
+                $sqlConn = New-Object System.Data.SqlClient.SqlConnection($localSqlConnStr)
+                try {
+                    $sqlConn.Open()
+                    $qIdx = 1
+                    foreach ($stmt in $autoStatements) {
+                        $cmd = $sqlConn.CreateCommand()
+                        $cmd.CommandText = $stmt
+                        $ad = New-Object System.Data.SqlClient.SqlDataAdapter($cmd)
+                        $ds = New-Object System.Data.DataSet
+                        $null = $ad.Fill($ds)
+                        $rows = @()
+                        if ($ds.Tables.Count -gt 0 -and $ds.Tables[0].Rows.Count -gt 0) {
+                            $cols = @($ds.Tables[0].Columns | ForEach-Object { $_.ColumnName })
+                            $tmp = [System.Collections.Generic.List[object]]::new()
+                            foreach ($dr in $ds.Tables[0].Rows) {
+                                $o = [ordered]@{}
+                                foreach ($c in $cols) { $v = $dr[$c]; $o[$c] = if ($v -is [DBNull]) { $null } else { $v } }
+                                $tmp.Add([PSCustomObject]$o)
+                            }
+                            $rows = Protect-JavisPiiTable -Rows ($tmp.ToArray()) -RawData:$RawData.IsPresent
+                        }
+                        Write-Output ("--- Query #$qIdx ---`r`n" + ($rows | ConvertTo-Json -Depth 4 -Compress))
+                        $qIdx++
+                    }
+                } finally {
+                    if ($sqlConn.State -eq "Open") { $sqlConn.Close() }
+                    $sqlConn.Dispose()
+                }
+            } finally {
+                if ($proxyProc -and -not $proxyProc.HasExited) { Stop-Process -Id $proxyProc.Id -Force -ErrorAction SilentlyContinue }
+                try { $null = Send-SignedJobAndWait -InnerPayload @{ mode = "CloseTunnel"; tunnel_id = $tId } -WaitSec 15 } catch {}
+            }
+            return
+        } catch {
+            Write-Host "[AUTO-FALLBACK] Tunnel unavailable ($($_.Exception.Message)). Falling back to Query lane..." -ForegroundColor Yellow
+            $Mode = "Query"
+        }
+    }
+
+    if ($Mode -eq "Query" -and $autoStatements.Count -gt 1) {
+        $qIdx = 1
+        foreach ($stmt in $autoStatements) {
+            $qInner = @{
+                mode              = "Query"
+                command           = $stmt
+                sql               = $stmt
+                db_profile        = $DbProfile
+                connection_string = $ConnectionString
+                raw_data          = $RawData.IsPresent
+                confirm_write     = $false
+                max_rows          = $MaxRows
+                remote_path       = ""
+            }
+            $qRes = Send-SignedJobAndWait -InnerPayload $qInner -WaitSec $TimeoutSec
+            Write-Output ("--- Query #$qIdx ---`r`n" + $qRes.data.stdout)
+            if ($qRes.data.stderr) { Write-Host $qRes.data.stderr -ForegroundColor Red }
+            if ($qRes.exit_code -ne 0) { exit $qRes.exit_code }
+            $qIdx++
+        }
+        return
+    }
 }
 
 if ($Mode -eq "SqlExec" -and -not $ConfirmWrite.IsPresent) {

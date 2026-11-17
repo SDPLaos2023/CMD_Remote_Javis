@@ -378,3 +378,138 @@ function Add-JavisAuditEntry {
     }
     return $entryHash
 }
+
+function Split-JavisSqlStatements {
+    param([string]$Sql)
+    $list = [System.Collections.Generic.List[string]]::new()
+    if ([string]::IsNullOrWhiteSpace($Sql)) { return ,($list.ToArray()) }
+
+    $sb = New-Object System.Text.StringBuilder
+    $inSingleQuote = $false
+    $inLineComment = $false
+    $inBlockComment = $false
+    $len = $Sql.Length
+
+    for ($i = 0; $i -lt $len; $i++) {
+        $ch = $Sql[$i]
+        $next = if ($i + 1 -lt $len) { $Sql[$i + 1] } else { [char]0 }
+
+        if ($inLineComment) {
+            [void]$sb.Append($ch)
+            if ($ch -eq "`n") { $inLineComment = $false }
+            continue
+        }
+        if ($inBlockComment) {
+            [void]$sb.Append($ch)
+            if ($ch -eq '*' -and $next -eq '/') {
+                [void]$sb.Append('/')
+                $i++
+                $inBlockComment = $false
+            }
+            continue
+        }
+        if ($inSingleQuote) {
+            [void]$sb.Append($ch)
+            if ($ch -eq "'" -and $next -eq "'") {
+                [void]$sb.Append("'")
+                $i++
+            } elseif ($ch -eq "'") {
+                $inSingleQuote = $false
+            }
+            continue
+        }
+
+        if ($ch -eq '-' -and $next -eq '-') {
+            [void]$sb.Append("--")
+            $i++
+            $inLineComment = $true
+            continue
+        }
+        if ($ch -eq '/' -and $next -eq '*') {
+            [void]$sb.Append("/*")
+            $i++
+            $inBlockComment = $true
+            continue
+        }
+        if ($ch -eq "'") {
+            [void]$sb.Append($ch)
+            $inSingleQuote = $true
+            continue
+        }
+        if ($ch -eq ';') {
+            $seg = $sb.ToString().Trim()
+            if (-not [string]::IsNullOrWhiteSpace($seg)) { $list.Add($seg) }
+            [void]$sb.Clear()
+            continue
+        }
+        [void]$sb.Append($ch)
+    }
+
+    $tail = $sb.ToString().Trim()
+    if (-not [string]::IsNullOrWhiteSpace($tail)) { $list.Add($tail) }
+    return $list.ToArray()
+}
+
+function Resolve-JavisAutoMode {
+    param(
+        [string]$Text = "",
+        [switch]$HasLocalPort,
+        [switch]$RawData
+    )
+    if ($HasLocalPort.IsPresent) {
+        return @{
+            Mode            = "Tunnel"
+            FallbackMode    = "Query"
+            Statements      = @()
+            RequiresConfirm = $false
+            Reason          = "Explicit local port requested for direct TCP/SSMS access"
+        }
+    }
+
+    $stmts = @(Split-JavisSqlStatements -Sql $Text)
+    if ($stmts.Count -gt 0) {
+        $allReadOnly = $true
+        foreach ($s in $stmts) {
+            if (-not (Test-JavisReadOnlySql -Sql $s)) {
+                $allReadOnly = $false
+                break
+            }
+        }
+        if ($allReadOnly) {
+            if ($stmts.Count -ge 4) {
+                return @{
+                    Mode            = "Tunnel"
+                    FallbackMode    = "Query"
+                    Statements      = $stmts
+                    RequiresConfirm = $false
+                    Reason          = "Batch of $($stmts.Count) read queries (>= 4 threshold); Tunnel preferred with Query fallback"
+                }
+            }
+            return @{
+                Mode            = "Query"
+                FallbackMode    = ""
+                Statements      = $stmts
+                RequiresConfirm = $false
+                Reason          = "1-3 Read-Only SQL queries; Query lane is fastest and enforces PII masking"
+            }
+        }
+
+        if ($Text -match "(?is)^\s*(?:--[^\r\n]*\s+|/\*[\s\S]*?\*/\s*)*(INSERT|UPDATE|DELETE|MERGE|DROP|ALTER|CREATE|TRUNCATE|EXEC|EXECUTE|GRANT|REVOKE|BACKUP|RESTORE)\b") {
+            return @{
+                Mode            = "SqlExec"
+                FallbackMode    = ""
+                Statements      = $stmts
+                RequiresConfirm = $true
+                Reason          = "Write/procedural SQL detected; routing to SqlExec with confirmation gate"
+            }
+        }
+    }
+
+    return @{
+        Mode            = "PowerShell"
+        FallbackMode    = ""
+        Statements      = @()
+        RequiresConfirm = $false
+        Reason          = "Non-SQL command detected; routing to PowerShell"
+    }
+}
