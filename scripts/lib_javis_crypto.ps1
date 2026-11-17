@@ -513,3 +513,20 @@ function Resolve-JavisAutoMode {
         Reason          = "Non-SQL command detected; routing to PowerShell"
     }
 }
+
+function Test-JavisIdleTimeoutExpired {
+    <#
+    .SYNOPSIS
+    Returns $true when a temporary-mode agent has exceeded its inactivity budget with no active tunnels.
+    #>
+    param(
+        [bool]$IsFixedService,
+        [double]$IdleTimeoutMinutes,
+        [DateTime]$LastActivityUtc,
+        [int]$ActiveTunnelCount = 0,
+        [DateTime]$NowUtc = [DateTime]::UtcNow
+    )
+    if ($IsFixedService -or $IdleTimeoutMinutes -le 0) { return $false }
+    if ($ActiveTunnelCount -gt 0) { return $false }
+    return (($NowUtc - $LastActivityUtc).TotalMinutes -ge $IdleTimeoutMinutes)
+}

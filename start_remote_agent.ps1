@@ -8,7 +8,8 @@ param (
     [switch]$ConfigureDbProfile,
     [string]$DbProfileName = "",
     [string]$DbConnectionString = "",
-    [int]$PollIntervalSec = 3
+    [int]$PollIntervalSec = 3,
+    [double]$IdleTimeoutMinutes = 300
 )
 
 $ErrorActionPreference = "Stop"
@@ -545,6 +546,23 @@ function Resolve-JavisAutoMode {
         RequiresConfirm = $false
         Reason          = "Non-SQL command detected; routing to PowerShell"
     }
+}
+
+function Test-JavisIdleTimeoutExpired {
+    <#
+    .SYNOPSIS
+    Returns $true when a temporary-mode agent has exceeded its inactivity budget with no active tunnels.
+    #>
+    param(
+        [bool]$IsFixedService,
+        [double]$IdleTimeoutMinutes,
+        [DateTime]$LastActivityUtc,
+        [int]$ActiveTunnelCount = 0,
+        [DateTime]$NowUtc = [DateTime]::UtcNow
+    )
+    if ($IsFixedService -or $IdleTimeoutMinutes -le 0) { return $false }
+    if ($ActiveTunnelCount -gt 0) { return $false }
+    return (($NowUtc - $LastActivityUtc).TotalMinutes -ge $IdleTimeoutMinutes)
 }
 
 # BB_JAVIS Native WebSocket-to-TCP Tunnel Library (Pure ASCII, PowerShell 5.1 / .NET 4.5+)
@@ -1265,78 +1283,86 @@ function Save-ServicePairingState {
     [System.IO.File]::WriteAllText($serviceConfigFile, $cfgObj, $utf8NoBom)
 }
 
+$script:LastActivityUtc = [DateTime]::UtcNow
+
 function Invoke-DevicePairing {
-    $code = ""
-    $pairSecret = ""
-    for ($attempt = 0; $attempt -lt 10; $attempt++) {
-        if ($attempt -gt 0 -or $script:DeviceId -notmatch "^\d{4}$") {
-            $script:DeviceId = New-Javis4DigitPin
-        }
-        $code = $script:DeviceId
-        $reqBody = @{
-            device_id      = $script:DeviceId
-            pairing_code   = $code
-            hostname       = $env:COMPUTERNAME
-            custom_name    = $script:DeviceCustomName
-            device_pub_key = $script:DevicePubXml
-        } | ConvertTo-Json -Compress
-
-        $respRaw = Invoke-GatewayHttp -Uri ($BaseUrl + "pairing/request") -Method "POST" -Body $reqBody -TimeoutSec 15 -Key ""
-        $respObj = $respRaw | ConvertFrom-Json -ErrorAction SilentlyContinue
-        if ($respObj -and $respObj.error -eq "Conflict") {
-            $script:DeviceId = New-Javis4DigitPin
-            continue
-        }
-        if ($respObj -and $respObj.pairing_secret) {
-            $pairSecret = $respObj.pairing_secret
-            break
-        }
-        throw "Failed to create pairing request: $respRaw"
-    }
-    if (-not $pairSecret) {
-        throw "Unable to reserve a unique 4-digit pairing PIN after 10 attempts."
-    }
-
-    if ($isFixedService) {
-        [System.IO.File]::WriteAllText($pairingBannerFile, "PAIRING_PIN=$code`r`nDEVICE_ID=$($script:DeviceId)`r`nCREATED_UTC=$([DateTime]::UtcNow.ToString('o'))", $utf8NoBom)
-    }
-
-    Write-Host "======================================================================" -ForegroundColor DarkCyan
-    Write-Host "             BB_JAVIS ZERO-TRUST DEVICE PAIRING REQUIRED              " -ForegroundColor Yellow
-    Write-Host "======================================================================" -ForegroundColor DarkCyan
-    Write-Host "  -> Remote PIN   : " -NoNewline -ForegroundColor Gray
-    Write-Host "[ $code ]" -ForegroundColor Green
-    Write-Host "  -> Machine Name : $($script:DeviceCustomName) ($env:COMPUTERNAME)" -ForegroundColor White
-    Write-Host "  -> Run on Dev   : send_remote_command.bat -Pair $code" -ForegroundColor Yellow
-    Write-Host "======================================================================" -ForegroundColor DarkCyan
-
     while ($true) {
-        Start-Sleep -Seconds 2
-        try {
-            $statusRaw = Invoke-GatewayHttp -Uri ($BaseUrl + "pairing/status/$code") -Method "GET" -TimeoutSec 10 -Key "" -ExtraHeaders @{ "X-Pairing-Secret" = $pairSecret }
-            $statusObj = $statusRaw | ConvertFrom-Json
-            if ($statusObj -and $statusObj.status -eq "claimed" -and $statusObj.device_token) {
-                if ($statusObj.device_id) { $script:DeviceId = $statusObj.device_id.ToString() }
-                $script:DeviceToken = $statusObj.device_token.ToString()
-                $script:TenantId = $statusObj.tenant.ToString()
-                $script:PairedAdmins[$statusObj.admin_id.ToString()] = $statusObj.admin_pub_key.ToString()
-                Save-ServicePairingState
-                if (Test-Path $pairingBannerFile) { Remove-Item $pairingBannerFile -Force -ErrorAction SilentlyContinue }
-                Write-Host "[PAIRED] Paired with admin '$($statusObj.admin_id)' -> Remote PIN: [ $($script:DeviceId) ] (Tenant: $($script:TenantId))." -ForegroundColor Green
+        $code = ""
+        $pairSecret = ""
+        for ($attempt = 0; $attempt -lt 10; $attempt++) {
+            Invoke-IdleTimeoutShutdownIfExpired
+            if ($attempt -gt 0 -or $script:DeviceId -notmatch "^\d{4}$") {
+                $script:DeviceId = New-Javis4DigitPin
+            }
+            $code = $script:DeviceId
+            $reqBody = @{
+                device_id      = $script:DeviceId
+                pairing_code   = $code
+                hostname       = $env:COMPUTERNAME
+                custom_name    = $script:DeviceCustomName
+                device_pub_key = $script:DevicePubXml
+            } | ConvertTo-Json -Compress
+
+            $respRaw = Invoke-GatewayHttp -Uri ($BaseUrl + "pairing/request") -Method "POST" -Body $reqBody -TimeoutSec 15 -Key ""
+            $respObj = $respRaw | ConvertFrom-Json -ErrorAction SilentlyContinue
+            if ($respObj -and $respObj.error -eq "Conflict") {
+                $script:DeviceId = New-Javis4DigitPin
+                continue
+            }
+            if ($respObj -and $respObj.pairing_secret) {
+                $pairSecret = $respObj.pairing_secret
                 break
             }
-            if ($statusObj -and $statusObj.error -eq "Gone") {
-                Write-Host "[PAIRING] Pairing PIN expired. Generating a new 4-digit PIN..." -ForegroundColor Yellow
-                $script:DeviceId = New-Javis4DigitPin
-                Invoke-DevicePairing
-                return
-            }
-        } catch {}
-    }
-}
+            throw "Failed to create pairing request: $respRaw"
+        }
+        if (-not $pairSecret) {
+            throw "Unable to reserve a unique 4-digit pairing PIN after 10 attempts."
+        }
 
-if ([string]::IsNullOrWhiteSpace($script:DeviceToken) -or $script:PairedAdmins.Count -eq 0) {
-    Invoke-DevicePairing
+        if ($isFixedService) {
+            [System.IO.File]::WriteAllText($pairingBannerFile, "PAIRING_PIN=$code`r`nDEVICE_ID=$($script:DeviceId)`r`nCREATED_UTC=$([DateTime]::UtcNow.ToString('o'))", $utf8NoBom)
+        }
+
+        Write-Host "======================================================================" -ForegroundColor DarkCyan
+        Write-Host "             BB_JAVIS ZERO-TRUST DEVICE PAIRING REQUIRED              " -ForegroundColor Yellow
+        Write-Host "======================================================================" -ForegroundColor DarkCyan
+        Write-Host "  -> Remote PIN   : " -NoNewline -ForegroundColor Gray
+        Write-Host "[ $code ]" -ForegroundColor Green
+        Write-Host "  -> Machine Name : $($script:DeviceCustomName) ($env:COMPUTERNAME)" -ForegroundColor White
+        Write-Host "  -> Run on Dev   : send_remote_command.bat -Pair $code" -ForegroundColor Yellow
+        if (-not $isFixedService -and $IdleTimeoutMinutes -gt 0) {
+            Write-Host "  -> Auto-Close   : Idle timeout $IdleTimeoutMinutes min (temp mode)" -ForegroundColor Gray
+        }
+        Write-Host "======================================================================" -ForegroundColor DarkCyan
+
+        $expiredPin = $false
+        while ($true) {
+            Start-Sleep -Seconds 2
+            Invoke-IdleTimeoutShutdownIfExpired
+            try {
+                $statusRaw = Invoke-GatewayHttp -Uri ($BaseUrl + "pairing/status/$code") -Method "GET" -TimeoutSec 10 -Key "" -ExtraHeaders @{ "X-Pairing-Secret" = $pairSecret }
+                $statusObj = $statusRaw | ConvertFrom-Json
+                if ($statusObj -and $statusObj.status -eq "claimed" -and $statusObj.device_token) {
+                    if ($statusObj.device_id) { $script:DeviceId = $statusObj.device_id.ToString() }
+                    $script:DeviceToken = $statusObj.device_token.ToString()
+                    $script:TenantId = $statusObj.tenant.ToString()
+                    $script:PairedAdmins[$statusObj.admin_id.ToString()] = $statusObj.admin_pub_key.ToString()
+                    Save-ServicePairingState
+                    if (Test-Path $pairingBannerFile) { Remove-Item $pairingBannerFile -Force -ErrorAction SilentlyContinue }
+                    $script:LastActivityUtc = [DateTime]::UtcNow
+                    Write-Host "[PAIRED] Paired with admin '$($statusObj.admin_id)' -> Remote PIN: [ $($script:DeviceId) ] (Tenant: $($script:TenantId))." -ForegroundColor Green
+                    return
+                }
+                if ($statusObj -and $statusObj.error -eq "Gone") {
+                    Write-Host "[PAIRING] Pairing PIN expired. Generating a new 4-digit PIN..." -ForegroundColor Yellow
+                    $script:DeviceId = New-Javis4DigitPin
+                    $expiredPin = $true
+                    break
+                }
+            } catch {}
+        }
+        if (-not $expiredPin) { break }
+    }
 }
 
 function Get-LocalIPv4 {
@@ -1393,6 +1419,7 @@ function Close-JavisTunnelById {
         } catch {}
     }
     $script:ActiveTunnels.Remove($TunnelId)
+    if (-not $script:isExiting) { $script:LastActivityUtc = [DateTime]::UtcNow }
 }
 
 function Close-ExpiredTunnels {
@@ -1410,11 +1437,26 @@ $cleanExitAction = {
     foreach ($tid in @($script:ActiveTunnels.Keys)) {
         Close-JavisTunnelById -TunnelId $tid
     }
-    if ($isFixedService) {
-        try { Update-DeviceHeartbeat -Status "offline" } catch {}
-    } else {
-        try { $null = Invoke-GatewayHttp -Uri ($BaseUrl + "jobs/$($script:DeviceId).json") -Method "DELETE" -TimeoutSec 5 } catch {}
-        try { $null = Invoke-GatewayHttp -Uri ($BaseUrl + "devices/$($script:DeviceId).json") -Method "DELETE" -TimeoutSec 5 } catch {}
+    if (-not [string]::IsNullOrWhiteSpace($script:DeviceToken)) {
+        if ($isFixedService) {
+            try { Update-DeviceHeartbeat -Status "offline" } catch {}
+        } else {
+            try { $null = Invoke-GatewayHttp -Uri ($BaseUrl + "jobs/$($script:DeviceId).json") -Method "DELETE" -TimeoutSec 5 } catch {}
+            try { $null = Invoke-GatewayHttp -Uri ($BaseUrl + "devices/$($script:DeviceId).json") -Method "DELETE" -TimeoutSec 5 } catch {}
+        }
+    }
+}
+
+function Invoke-IdleTimeoutShutdownIfExpired {
+    # Active on-demand tunnels defer the idle timer until they close or expire
+    if ($script:ActiveTunnels -and $script:ActiveTunnels.Count -gt 0) {
+        $script:LastActivityUtc = [DateTime]::UtcNow
+        return
+    }
+    if (Test-JavisIdleTimeoutExpired -IsFixedService $isFixedService -IdleTimeoutMinutes $IdleTimeoutMinutes -LastActivityUtc $script:LastActivityUtc -ActiveTunnelCount 0) {
+        Write-Host "[IDLE-EXIT] No command or activity for $IdleTimeoutMinutes min in temp mode. Closing PowerShell..." -ForegroundColor Yellow
+        & $cleanExitAction
+        [Environment]::Exit(0)
     }
 }
 
@@ -1422,6 +1464,10 @@ try {
     [Console]::TreatControlCAsInput = $false
     [Console]::add_CancelKeyPress([ConsoleCancelEventHandler]{ param($s, $e) & $cleanExitAction })
 } catch {}
+
+if ([string]::IsNullOrWhiteSpace($script:DeviceToken) -or $script:PairedAdmins.Count -eq 0) {
+    Invoke-DevicePairing
+}
 
 function Send-EncryptedJobResult {
     param(
@@ -1633,6 +1679,8 @@ function Execute-RemoteJob {
         return
     }
 
+    $script:LastActivityUtc = [DateTime]::UtcNow
+
     $mode = if ($payload.mode) { $payload.mode.ToString() } else { "PowerShell" }
     $dbProfile = if ($payload.db_profile) { $payload.db_profile.ToString() } else { "" }
     $cmdTextForAudit = if ($payload.sql) { $payload.sql.ToString() } elseif ($payload.command) { $payload.command.ToString() } else { $mode }
@@ -1729,6 +1777,7 @@ function Execute-RemoteJob {
 
     $finalStatus = if ($exitCode -eq 0) { "completed" } else { "failed" }
     Send-EncryptedJobResult -JobId $JobId -AdminPubXml $adminPubXml -Status $finalStatus -ExitCode $exitCode -PlainResult $resData
+    $script:LastActivityUtc = [DateTime]::UtcNow
 }
 
 Update-DeviceHeartbeat -Status "online"
@@ -1740,24 +1789,35 @@ Write-Host "  -> Remote PIN : [ $($script:DeviceId) ]" -ForegroundColor Green
 Write-Host "  -> Host Alias : $($script:DeviceCustomName) ($env:COMPUTERNAME)" -ForegroundColor Cyan
 Write-Host "  -> Tenant     : $($script:TenantId)" -ForegroundColor White
 Write-Host "  -> Gateway    : $BaseUrl" -ForegroundColor Gray
+if (-not $isFixedService -and $IdleTimeoutMinutes -gt 0) {
+    Write-Host "  -> Auto-Close : Idle timeout $IdleTimeoutMinutes min (temp mode)" -ForegroundColor Gray
+}
 Write-Host "======================================================================" -ForegroundColor DarkCyan
 
 $lastProcessedJob = ""
 try {
     while (-not $script:isExiting) {
         Close-ExpiredTunnels
+        Invoke-IdleTimeoutShutdownIfExpired
         if ($script:restartRequested) {
             $script:restartRequested = $false
             [GC]::Collect()
         }
 
         try {
+            $sseTimeoutMs = 35000
+            if (-not $isFixedService -and $IdleTimeoutMinutes -gt 0 -and $script:ActiveTunnels.Count -eq 0) {
+                $remMs = [int][Math]::Ceiling((($script:LastActivityUtc.AddMinutes($IdleTimeoutMinutes)) - [DateTime]::UtcNow).TotalMilliseconds)
+                if ($remMs -lt 35000) {
+                    $sseTimeoutMs = [Math]::Max(1000, $remMs)
+                }
+            }
             $streamUrl = $BaseUrl + "jobs/$($script:DeviceId).json"
             $request = [System.Net.HttpWebRequest]::Create($streamUrl)
             $request.Accept = "text/event-stream"
             $request.Headers["X-Javis-Key"] = $script:DeviceToken
-            $request.Timeout = 35000
-            $request.ReadWriteTimeout = 35000
+            $request.Timeout = $sseTimeoutMs
+            $request.ReadWriteTimeout = $sseTimeoutMs
 
             $response = $request.GetResponse()
             $stream = $response.GetResponseStream()
@@ -1766,11 +1826,13 @@ try {
 
             while (-not $reader.EndOfStream -and -not $script:isExiting) {
                 Close-ExpiredTunnels
+                Invoke-IdleTimeoutShutdownIfExpired
                 if (([DateTime]::UtcNow - $script:LastHeartbeatUtc).TotalSeconds -ge 28) {
                     Update-DeviceHeartbeat -Status "online"
                 }
 
                 $line = $reader.ReadLine()
+                Invoke-IdleTimeoutShutdownIfExpired
                 if ($null -eq $line) { break }
 
                 if ($line.StartsWith("data: ")) {
@@ -1812,6 +1874,8 @@ try {
             }
             try { $reader.Close(); $stream.Close(); $response.Close(); $request.Abort() } catch {}
         } catch {
+            Close-ExpiredTunnels
+            Invoke-IdleTimeoutShutdownIfExpired
             if (([DateTime]::UtcNow - $script:LastHeartbeatUtc).TotalSeconds -ge 28) {
                 Update-DeviceHeartbeat -Status "online"
             }

@@ -561,6 +561,23 @@ function Resolve-JavisAutoMode {
     }
 }
 
+function Test-JavisIdleTimeoutExpired {
+    <#
+    .SYNOPSIS
+    Returns $true when a temporary-mode agent has exceeded its inactivity budget with no active tunnels.
+    #>
+    param(
+        [bool]$IsFixedService,
+        [double]$IdleTimeoutMinutes,
+        [DateTime]$LastActivityUtc,
+        [int]$ActiveTunnelCount = 0,
+        [DateTime]$NowUtc = [DateTime]::UtcNow
+    )
+    if ($IsFixedService -or $IdleTimeoutMinutes -le 0) { return $false }
+    if ($ActiveTunnelCount -gt 0) { return $false }
+    return (($NowUtc - $LastActivityUtc).TotalMinutes -ge $IdleTimeoutMinutes)
+}
+
 # BB_JAVIS Native WebSocket-to-TCP Tunnel Library (Pure ASCII, PowerShell 5.1 / .NET 4.5+)
 
 function Get-JavisCscPath {
