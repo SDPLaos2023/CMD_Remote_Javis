@@ -1072,6 +1072,18 @@ $dbProfilesFile = Join-Path $serviceConfigDir "db_profiles.dpapi"
 $auditDir = Join-Path $serviceConfigDir "audit"
 $binDir = Join-Path $serviceConfigDir "bin"
 $pairingBannerFile = Join-Path $serviceConfigDir "pairing.txt"
+$serviceErrorLog = Join-Path $serviceConfigDir "service_error.log"
+
+trap {
+    if ($isFixedService -and $serviceConfigDir) {
+        try {
+            if (-not (Test-Path $serviceConfigDir)) { $null = New-Item -ItemType Directory -Path $serviceConfigDir -Force }
+            $msg = "[" + [DateTime]::UtcNow.ToString("o") + "] " + $_.Exception.ToString() + "`r`n"
+            [System.IO.File]::AppendAllText($serviceErrorLog, $msg, $utf8NoBom)
+        } catch {}
+    }
+    break
+}
 
 function Resolve-JavisGatewayUrl {
     param([string]$ArgUrl)
