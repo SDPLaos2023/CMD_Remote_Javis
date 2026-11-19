@@ -1,65 +1,97 @@
-# ⚡ BB_JAVIS Remote: Real-Time Zero-Dependency Remote Server & DB Management
+# ⚡ BB_JAVIS / CMD_Remote: Zero-Trust Remote Server & DB Management
 
-High-performance remote server execution, file transfer, and SQL database management via Cloud Command Board. Operates seamlessly without VPN, powered by **AI Autonomous Resilience (Intelligent Watchdog, Auto-Retry & In-Place Auto-Restart)** to detect and recover from stalled commands automatically.
-
----
-
-## 🚀 Key Features
-
-* **AI Autonomous Resilience & Intelligent Watchdog:**
-  * **Pending Hang Guard (>20s):** Detects dispatched jobs that have not been picked up by any agent within 20 seconds.
-  * **Running Stalled Guard (>30s):** Detects running jobs that stall silently without heartbeats or output for more than 30 seconds.
-  * **Autonomous Auto-Retry:** Automatically aborts the stalled job (Emergency Abort) and resends it (Retry 1/1) without requiring operator intervention.
-  * **Heartbeat-Aware Safety:** For long-running operations (such as large database backups), active heartbeats every 1.5 seconds ensure the process continues safely without premature timeouts.
-* **In-Place Agent Auto-Restart (Self-Healing):**
-  * If a command stalls repeatedly after retry, an escalation signal `__JAVIS_SYSTEM_RESTART__` is dispatched.
-  * The agent executes an In-Place Reset (clearing Runspaces, Sockets, and running GC) within the same console window.
-  * **Preserves Same PIN:** Retains the existing 4-digit Secret Key (PIN) so ongoing automation can continue immediately.
-* **Enterprise Security Gateway (Cloudflare Edge WAF):** Obfuscates backend database infrastructure with anti-scanning protections.
-* **Multi-Tenant Data Isolation:** Isolates organization/fleet namespaces using HMAC-SHA256 Cryptographic API Keys.
-* **Local Machine Profile Persistence:** Persists local API keys (`config.json`) so users only need to enter keys once.
-* **Real-Time SSE Push Engine (<10ms):** Delivers sub-10ms command dispatch and status notifications via Server-Sent Events.
-* **Zero-Dependency 100%:** Powered entirely by Native .NET HTTP; runs out-of-the-box on modern Windows Server systems without external dependencies.
-* **Zero-Touch One-Link Setup:** Instantly runnable on remote servers via single-line commands with automated TLS 1.2 negotiation.
-* **Self-Destruct Clean Exit & Zero-Footprint:** Pressing `Ctrl+C` or closing the console purges the cloud session node immediately (Zero Data Residue).
-* **Universal Database & File Engine:**
-  * Real-time streaming PowerShell / CMD execution.
-  * Direct SQL Server queries returning JSON results.
-  * Automated SQL database backups with compression.
-  * Secure bidirectional file and directory transfers.
-  * GUI automation via UI Automation (`win-arm`) and real-time desktop screen streaming.
+High-performance remote server control, SQL database querying/tunneling, and file transfer without VPN — powered by **Cloudflare Edge Gateway**, **SSE Real-Time Push (<10ms)**, and **End-to-End Encryption (RSA-2048 OAEP + AES-256-CBC + HMAC-SHA256)**.
 
 ---
 
-## 💻 How to Run on Target Machines (Dual-Mode Target Agent)
+## 🤖 Quick Guide for AI Agents (สำหรับสั่งให้ AI เรียนรู้การใช้งาน)
 
-The system supports two operating modes:
+If an operator asks you (an AI coding assistant) to learn or operate **CMD_Remote / BB_JAVIS** from this repository, follow these exact rules and commands:
 
-### 1️⃣ Mode 1: On-Demand / Temporary Session (`da.gd/bbj`)
-> Ideal for ad-hoc debugging or temporary tasks. Randomizes a 4-digit PIN in memory; closing the console deletes the session completely.
+### 1. First-Time Check (Controller Dev Machine)
+Run `-List` to check paired online devices:
+```cmd
+send_remote_command.bat -List
+```
+- **If this Dev machine has never been registered:** Running `send_remote_command.bat` prompts once for a **Team License Key (`JAVIS-XXXX-XXXX-XXXX`)** issued by the Team Owner (via `license_manager.bat`), or pass `-LicenseKey "JAVIS-XXXX-XXXX-XXXX"`. After activation, credentials are encrypted via Windows DPAPI under `%LOCALAPPDATA%\BB_Javis\` and never prompted again.
+- **If no target device appears in `-List` yet:** Ask the target operator for their **4-digit Remote PIN** (`1000-9999`), then pair once:
+  ```cmd
+  send_remote_command.bat -Pair "4821"
+  ```
 
-Open **PowerShell (Run as Administrator)** and execute:
+### 2. AI Auto-Decision Matrix (Which `-Mode` to use)
+Always choose the execution mode automatically based on the task (never ask the user unnecessarily, **except** before SQL writes):
+
+| Task Type | Required Mode | Key Behavior & Safety Gate |
+|---|---|---|
+| **Read SQL (`SELECT`, `WITH`), 1–3 statements** | **`-Mode Query`** (or `-Mode Auto`) | Sub-second JSON output, supports Windows Auth (`Integrated Security=True`) on target server, blocks writes (`DELETE`/`UPDATE`/`DROP`/`EXEC`), and masks PII columns automatically (pass `-RawData` only when raw values are needed). |
+| **Batch Read SQL (`>= 4` statements), large `.sql`, or direct SSMS/TCP access** | **`-Mode Tunnel`** (or `-Mode Auto`) | Opens encrypted local port `127.0.0.1:11433` → target `1433` via On-Demand Cloudflare Tunnel (with automatic fallback to `Query`). |
+| **Write / Schema SQL (`INSERT`, `UPDATE`, `DELETE`, `ALTER`, `DROP`)** | **`-Mode SqlExec`** *(Human Gate Required)* | Runs inside an automatic transaction rollback wrapper and requires `-ConfirmWrite`. **AI RULE: Never pass `-ConfirmWrite` automatically; show the target machine, `DbProfile`, and exact SQL to the user for explicit approval first.** |
+| **OS commands, Windows Services, file inspection** | **`-Mode PowerShell`** (or `-Mode Auto`) | E2E encrypted PowerShell runspace execution + RSA-SHA256 signature verification. |
+| **File transfer** | **`-Mode Upload` / `-Mode Download`** | Encrypted base64 payload transfer between Dev and Target. |
+
+### 3. Essential AI Command Reference
+```cmd
+:: Fleet status
+send_remote_command.bat -List
+
+:: Pair a new target machine using its 4-digit PIN
+send_remote_command.bat -Pair "4821"
+
+:: Run PowerShell by 4-digit PIN or Machine Name (-TargetHost)
+send_remote_command.bat -Pin "4821" -Mode PowerShell -Command "hostname; Get-Service *SQL*"
+send_remote_command.bat -TargetHost "TDP-IMMIGRATION" -Mode PowerShell -Command "Get-Process | Select -First 10"
+
+:: Auto-Mode (1-3 SELECT -> Query | >=4 SELECT -> Tunnel+Fallback | Write -> SqlExec Gate | Non-SQL -> PowerShell)
+send_remote_command.bat -TargetHost "TDP-IMMIGRATION" -Mode Auto -DbProfile "Default" -SqlQuery "SELECT TOP 10 name FROM sys.databases"
+
+:: Read-Only SQL Query with DPAPI DB Profile (no DB password sent over network)
+send_remote_command.bat -TargetHost "TDP-IMMIGRATION" -Mode Query -DbProfile "Default" -SqlQuery "SELECT TOP 5 * FROM Users"
+send_remote_command.bat -TargetHost "TDP-IMMIGRATION" -Mode Query -DbProfile "Default" -SqlQuery "SELECT TOP 5 * FROM Users" -RawData
+
+:: Explicit DB Write (ONLY after user confirms exact SQL)
+send_remote_command.bat -TargetHost "TDP-IMMIGRATION" -Mode SqlExec -DbProfile "Default" -SqlQuery "UPDATE Config SET Value = '1' WHERE Id = 5" -ConfirmWrite
+
+:: On-Demand Tunnel (connect SSMS / app to 127.0.0.1,11433)
+send_remote_command.bat -TargetHost "TDP-IMMIGRATION" -Mode Tunnel -LocalPort 11433 -TargetPort 1433 -DurationMin 30
+
+:: File Transfer
+send_remote_command.bat -Pin "4821" -Mode Upload -LocalPath "C:\local\app.zip" -RemotePath "C:\temp\app.zip"
+send_remote_command.bat -Pin "4821" -Mode Download -RemotePath "C:\logs\app.log" -OutputDir "C:\downloads"
+
+:: Revoke compromised device or admin
+send_remote_command.bat -Mode Revoke -RevokeRole "adm" -RevokeId "oldadmin"
+```
+
+---
+
+## 💻 How to Run on Target Machines (Dual-Mode Agent)
+
+### 1️⃣ Mode 1: Temporary / On-Demand Session (`da.gd/bbj`)
+> Ideal for ad-hoc troubleshooting. Generates a random 4-digit PIN in memory, purges cloud session on exit, and **auto-closes PowerShell after 5 hours of inactivity** (`-IdleTimeoutMinutes 300`, paused while an active Tunnel is open).
+
+Open **PowerShell (Run as Administrator)** on the target machine:
 ```powershell
 [Net.ServicePointManager]::SecurityProtocol = 3072; irm da.gd/bbj | iex
 ```
+*(Or double-click `start_remote_agent.bat`)*
 
----
+### 2️⃣ Mode 2: Persistent Windows Service 24/7 (`da.gd/bbj-fix`)
+> Ideal for production servers or POS machines. Registers native Windows Service `BB_JAVIS_Remote` under `SYSTEM`.
 
-### 2️⃣ Mode 2: Persistent Background Windows Service (`da.gd/bbj-fix`)
-> Ideal for production servers or retail POS stations running 24/7. Automatically starts on boot and remembers a permanent fixed PIN.
-
-Open **PowerShell (Run as Administrator)** and execute:
+Open **PowerShell (Run as Administrator)** on the target machine:
 ```powershell
 [Net.ServicePointManager]::SecurityProtocol = 3072; irm da.gd/bbj-fix | iex
 ```
-*(Or run `install_service.bat`)*
+*(Or run `install_service.bat` as Administrator)*
+- Waits up to 30 seconds for `C:\ProgramData\BB_Javis\pairing.txt` and prints the **4-digit Remote PIN** right in the installer window (waits up to 120s for Dev `-Pair <PIN>` confirmation; you may close anytime and the service remains active).
+- Logs any startup exceptions to `C:\ProgramData\BB_Javis\service_error.log`.
+- Configure saved DPAPI DB Profiles on the target server via:
+  ```powershell
+  powershell -File start_remote_agent.ps1 -ConfigureDbProfile -DbProfileName "Default" -DbConnectionString "Server=.\SQLEXPRESS;Database=MyDb;Integrated Security=True;"
+  ```
 
-* **Custom Host Name / Alias:** Prompts for a friendly machine name (e.g. `POS-Branch1`, `UAT-DB-01`) or inherits `$env:COMPUTERNAME` by pressing Enter. Can also be pre-set via `$env:BB_JAVIS_HOST = "MyServer"`.
-* Registers as a native Windows Service: `BB_JAVIS_Remote`.
-* Runs 24/7 in the background under the `SYSTEM` account with a persistent PIN.
-* Once installation completes, you can safely **close the PowerShell window**.
-
-#### To Uninstall Service:
+### 🗑️ Uninstall Service (`da.gd/bbj-unfix`)
 ```powershell
 [Net.ServicePointManager]::SecurityProtocol = 3072; irm da.gd/bbj-unfix | iex
 ```
@@ -67,43 +99,26 @@ Open **PowerShell (Run as Administrator)** and execute:
 
 ---
 
-## 🎮 Controller Usage (Send Commands & Fleet Management)
+## 🔑 Team Onboarding & Owner License Management
 
-### Interactive Fleet Management:
-Run the controller without arguments to display registered machines:
-```cmd
-send_remote_command.bat
-```
-* **Status Table:** Shows online/offline status, IP addresses, hostnames, and aliases.
-* **Navigation:**
-  * Enter `[1-N]` to select a machine.
-  * Enter machine name or IP to auto-match.
-  * Enter 4-digit PIN directly.
-  * Press `[N]` to rename a machine (Set Alias).
-  * Press `[D]` to delete an offline device.
-  * Press `[R]` to refresh fleet status.
-  * Press `[Q]` to quit.
-
-### Automated Command Line Execution:
-```cmd
-:: Run PowerShell command on specific PIN
-send_remote_command.bat -SecretKey "7881" -Mode "PowerShell" -Command "Get-Service | Select-Object -First 5"
-
-:: Target by Machine Alias or Name
-send_remote_command.bat -TargetHost "POS-Branch1" -Mode "PowerShell" -Command "hostname"
-
-:: Execute SQL Query
-send_remote_command.bat -SecretKey "7881" -Mode "Sql" -ConnectionString "Server=localhost;Database=master;Integrated Security=True;" -SqlQuery "SELECT @@VERSION AS Version"
-
-:: Purge all offline machines from cloud
-send_remote_command.bat -PurgeOffline
-```
+The system separates **Owner** (`bbj_own_*`) and **Teammate** (`bbj_adm_*`) privileges:
+- **Team Owner (`license_manager.bat`):**
+  - First run upgrades this Owner PC once using `JAVIS_MASTER_SECRET` to `bbj_own_*` (preserving existing paired devices).
+  - Issue keys (`JAVIS-XXXX-XXXX-XXXX`), limit machine count (`-MaxDevices 1` bound via Windows `MachineGuid`), set optional expiration (`-ExpireDays 30`), list active machines, and revoke access instantly:
+    ```cmd
+    license_manager.bat -Issue -TeamUser "somchai" -MaxDevices 1 -ExpireDays 30
+    license_manager.bat -List
+    license_manager.bat -Revoke -LicenseKey "JAVIS-XXXX-XXXX-XXXX"
+    ```
+- **Teammates (`send_remote_command.bat`):**
+  - **Do not need `JAVIS_MASTER_SECRET`.**
+  - On first launch on a Dev machine, enter the `JAVIS-XXXX-XXXX-XXXX` License Key when prompted (or run `send_remote_command.bat -LicenseKey "JAVIS-..."`). All subsequent runs work immediately with full command/DB/tunnel capabilities across tenant devices, while blocking unauthorized license minting (`403 Forbidden`).
 
 ---
 
-## 🔒 Security Architecture
+## 🔒 Zero-Trust Security Architecture
 
-1. **HMAC-SHA256 API Key Verification:** Every request is authenticated against an enterprise tenant profile.
-2. **Dynamic 4-Digit Ephemeral / Persistent PIN:** Target machines must match the operator's secret key before accepting any command.
-3. **Emergency Job Cancellation:** Operator `Ctrl+C` sends an immediate abort signal to kill running processes on the remote machine.
-4. **Zero Cloud Storage of Sensitive Output:** Job payloads self-destruct upon completion.
+1. **Zero-Secret Distribution:** No database URLs, Firebase secrets, or master keys exist in this repository; all traffic routes through the Cloudflare Edge Gateway (`https://bb-javis-gateway.apisit-yimboa.workers.dev`) with full TLS verification.
+2. **E2E Cryptography:** Command payloads and outputs are RSA-2048 OAEP + AES-256-CBC + HMAC-SHA256 encrypted and RSA-SHA256 signed with replay protection (`MaxSkewSec = 300`, `job_id` binding).
+3. **DPAPI Secret Storage:** Target DB connection strings (`LocalMachine`) and Dev RSA/API keys (`CurrentUser`) are encrypted with Windows DPAPI.
+4. **Dual Hash-Chained Audit Log:** Tamper-evident `audit_YYYY-MM.jsonl` stored locally on target machines plus metadata at the Worker `/audit` endpoint.
