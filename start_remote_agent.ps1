@@ -565,6 +565,179 @@ function Test-JavisIdleTimeoutExpired {
     return (($NowUtc - $LastActivityUtc).TotalMinutes -ge $IdleTimeoutMinutes)
 }
 
+function Save-JavisAdminProfile {
+    <#
+    .SYNOPSIS
+    Validates a bbj_adm_* or bbj_own_* API Key and provisions local DPAPI RSA-2048 keys and config.json without needing JAVIS_MASTER_SECRET.
+    #>
+    param(
+        [Parameter(Mandatory = $true)][string]$ApiKey,
+        [string]$GatewayUrl = "",
+        [string]$ConfigDir = "",
+        [switch]$PreserveExistingConfig
+    )
+    $cleanKey = $ApiKey.Trim()
+    if ($cleanKey -notmatch "^bbj_(adm|own)_([a-z0-9]+)_([a-z0-9-]+)_([0-9a-f]{8})_([0-9a-f]{32})$") {
+        throw "Invalid Admin/Owner API Key format. Expected: bbj_<adm|own>_<tenant>_<adminId>_<timeHex>_<sig>"
+    }
+    $role = $Matches[1].ToLower()
+    $tenantId = $Matches[2]
+    $adminId = $Matches[3]
+
+    if ([string]::IsNullOrWhiteSpace($ConfigDir)) {
+        $ConfigDir = Join-Path $env:LOCALAPPDATA "BB_Javis"
+    }
+    if (-not (Test-Path $ConfigDir)) {
+        $null = New-Item -ItemType Directory -Path $ConfigDir -Force
+    }
+
+    $utf8NoBom = New-Object System.Text.UTF8Encoding($false)
+    $privFile = Join-Path $ConfigDir "admin_key.dpapi"
+    $pubFile = Join-Path $ConfigDir "admin_pub.xml"
+    $createdKeypair = $false
+
+    if (-not (Test-Path $privFile) -or -not (Test-Path $pubFile)) {
+        $pair = New-JavisRsaKeyPair
+        $encPriv = Protect-JavisLocalSecret -PlainText $pair.PrivateXml -Scope "CurrentUser"
+        [System.IO.File]::WriteAllText($privFile, $encPriv, $utf8NoBom)
+        [System.IO.File]::WriteAllText($pubFile, $pair.PublicXml, $utf8NoBom)
+        $createdKeypair = $true
+    }
+    $pubXml = [System.IO.File]::ReadAllText($pubFile, $utf8NoBom)
+
+    $configFile = Join-Path $ConfigDir "config.json"
+    $existingGw = ""
+    if (Test-Path $configFile) {
+        try {
+            $old = Get-Content $configFile -Raw -Encoding UTF8 | ConvertFrom-Json
+            if ($old -and $old.gatewayUrl) { $existingGw = $old.gatewayUrl.ToString() }
+        } catch {}
+    }
+    $finalGw = if (-not [string]::IsNullOrWhiteSpace($GatewayUrl)) { $GatewayUrl.Trim().TrimEnd('/') + "/" }
+        elseif (-not [string]::IsNullOrWhiteSpace($existingGw)) { $existingGw.Trim().TrimEnd('/') + "/" }
+        else { "https://bb-javis-gateway.apisit-yimboa.workers.dev/" }
+
+    if (-not $PreserveExistingConfig.IsPresent -or -not (Test-Path $configFile)) {
+        $configData = @{
+            apiKey     = $cleanKey
+            role       = $role
+            tenantId   = $tenantId
+            adminId    = $adminId
+            gatewayUrl = $finalGw
+            savedAt    = [DateTime]::UtcNow.ToString("yyyy-MM-ddTHH:mm:ssZ")
+        }
+        [System.IO.File]::WriteAllText($configFile, ($configData | ConvertTo-Json -Depth 5), $utf8NoBom)
+    }
+
+    return @{
+        Role           = $role
+        TenantId       = $tenantId
+        AdminId        = $adminId
+        GatewayUrl     = $finalGw
+        ConfigFile     = $configFile
+        PublicXml      = $pubXml
+        CreatedKeypair = $createdKeypair
+    }
+}
+
+function Get-JavisMachineFingerprint {
+    <#
+    .SYNOPSIS
+    Returns a deterministic SHA-256 machine fingerprint bound to the Windows OS MachineGuid.
+    #>
+    $rawId = ""
+    try {
+        $reg = Get-ItemProperty -Path "HKLM:\SOFTWARE\Microsoft\Cryptography" -Name "MachineGuid" -ErrorAction SilentlyContinue
+        if ($reg -and $reg.MachineGuid) { $rawId = $reg.MachineGuid.ToString().Trim() }
+    } catch {}
+    if ([string]::IsNullOrWhiteSpace($rawId)) {
+        $rawId = "$env:COMPUTERNAME|$env:PROCESSOR_IDENTIFIER"
+    }
+    return Get-JavisSha256Hex -Text "BB_JAVIS_MACH:$rawId"
+}
+
+function Invoke-JavisLicenseActivation {
+    <#
+    .SYNOPSIS
+    Activates a team License Key against the Cloudflare Worker and persists the issued Admin API Key locally.
+    #>
+    param(
+        [Parameter(Mandatory = $true)][string]$LicenseKey,
+        [string]$GatewayUrl = "",
+        [string]$ConfigDir = ""
+    )
+    $cleanCode = $LicenseKey.Trim().ToUpper()
+    if ($cleanCode -notmatch "^JAVIS-[A-Z0-9]{4}-[A-Z0-9]{4}-[A-Z0-9]{4}$") {
+        throw "Invalid License Key format. Expected: JAVIS-XXXX-XXXX-XXXX"
+    }
+    if ([string]::IsNullOrWhiteSpace($ConfigDir)) {
+        $ConfigDir = Join-Path $env:LOCALAPPDATA "BB_Javis"
+    }
+    if (-not (Test-Path $ConfigDir)) {
+        $null = New-Item -ItemType Directory -Path $ConfigDir -Force
+    }
+    $utf8NoBom = New-Object System.Text.UTF8Encoding($false)
+    $privFile = Join-Path $ConfigDir "admin_key.dpapi"
+    $pubFile = Join-Path $ConfigDir "admin_pub.xml"
+    if (-not (Test-Path $privFile) -or -not (Test-Path $pubFile)) {
+        $pair = New-JavisRsaKeyPair
+        $encPriv = Protect-JavisLocalSecret -PlainText $pair.PrivateXml -Scope "CurrentUser"
+        [System.IO.File]::WriteAllText($privFile, $encPriv, $utf8NoBom)
+        [System.IO.File]::WriteAllText($pubFile, $pair.PublicXml, $utf8NoBom)
+    }
+    $pubXml = [System.IO.File]::ReadAllText($pubFile, $utf8NoBom)
+    $baseUrl = if (-not [string]::IsNullOrWhiteSpace($GatewayUrl)) { $GatewayUrl.Trim().TrimEnd('/') + "/" } else { "https://bb-javis-gateway.apisit-yimboa.workers.dev/" }
+    $bodyJson = @{
+        license_key         = $cleanCode
+        machine_fingerprint = (Get-JavisMachineFingerprint)
+        machine_name        = $env:COMPUTERNAME
+        admin_pub_key       = $pubXml
+    } | ConvertTo-Json -Compress
+
+    $req = [System.Net.HttpWebRequest]::Create($baseUrl + "licenses/activate")
+    $req.Method = "POST"
+    $req.Timeout = 15000
+    $req.ReadWriteTimeout = 15000
+    $req.ContentType = "application/json; charset=utf-8"
+    $bytes = $utf8NoBom.GetBytes($bodyJson)
+    $req.ContentLength = $bytes.Length
+    $st = $req.GetRequestStream()
+    try { $st.Write($bytes, 0, $bytes.Length) } finally { $st.Close() }
+
+    $rawResp = ""
+    try {
+        $resp = $req.GetResponse()
+        $rd = New-Object System.IO.StreamReader($resp.GetResponseStream(), $utf8NoBom)
+        $rawResp = $rd.ReadToEnd()
+        $rd.Close(); $resp.Close()
+    } catch [System.Net.WebException] {
+        $webResp = $_.Exception.Response
+        if ($webResp) {
+            $rd = New-Object System.IO.StreamReader($webResp.GetResponseStream(), $utf8NoBom)
+            $errRaw = $rd.ReadToEnd()
+            $rd.Close(); $webResp.Close()
+            $errObj = $errRaw | ConvertFrom-Json -ErrorAction SilentlyContinue
+            $msg = if ($errObj -and $errObj.message) { $errObj.message } elseif ($errObj -and $errObj.error) { $errObj.error } else { $errRaw }
+            throw "License activation failed: $msg"
+        }
+        throw $_
+    }
+
+    $res = $rawResp | ConvertFrom-Json
+    if (-not $res -or -not $res.api_key) {
+        throw "License activation returned unexpected payload: $rawResp"
+    }
+    $saved = Save-JavisAdminProfile -ApiKey $res.api_key -GatewayUrl $baseUrl -ConfigDir $ConfigDir
+    return @{
+        ApiKey     = $res.api_key
+        TenantId   = $saved.TenantId
+        AdminId    = $saved.AdminId
+        LicenseKey = $cleanCode
+        ExpiresAt  = $res.expires_at
+        ConfigFile = $saved.ConfigFile
+    }
+}
+
 # BB_JAVIS Native WebSocket-to-TCP Tunnel Library (Pure ASCII, PowerShell 5.1 / .NET 4.5+)
 
 function Get-JavisCscPath {
@@ -1203,14 +1376,15 @@ function Invoke-GatewayHttp {
         $response.Close()
         return $result
     } catch [System.Net.WebException] {
-        if ($_.Response) {
+        $webResp = $_.Exception.Response
+        if ($webResp) {
             try {
-                $respStream = $_.Response.GetResponseStream()
+                $respStream = $webResp.GetResponseStream()
                 $reader = New-Object System.IO.StreamReader($respStream, $utf8NoBom)
                 $errResult = $reader.ReadToEnd()
                 $reader.Close()
                 $respStream.Close()
-                $_.Response.Close()
+                $webResp.Close()
                 return $errResult
             } catch {}
         }
@@ -1668,15 +1842,42 @@ function Start-JavisOnDemandTunnel {
     }
 }
 
+$script:TrustedTenantAdmins = @{}
+
+function Resolve-TrustedAdminPubXml {
+    param([string]$AdminId)
+    if ([string]::IsNullOrWhiteSpace($AdminId)) { return "" }
+    if ($script:PairedAdmins.ContainsKey($AdminId)) {
+        return $script:PairedAdmins[$AdminId]
+    }
+    if ($script:TrustedTenantAdmins.ContainsKey($AdminId)) {
+        $entry = $script:TrustedTenantAdmins[$AdminId]
+        if (([DateTime]::UtcNow - $entry.fetched_utc).TotalSeconds -lt 60) {
+            return $entry.pub_xml
+        }
+    }
+    try {
+        $raw = Invoke-GatewayHttp -Uri ($BaseUrl + "admins/$AdminId") -Method "GET" -TimeoutSec 8
+        $obj = $raw | ConvertFrom-Json -ErrorAction SilentlyContinue
+        if ($obj -and $obj.admin_pub_key -and $obj.admin_pub_key.ToString().Contains("RSAKeyValue")) {
+            $pub = $obj.admin_pub_key.ToString()
+            $script:TrustedTenantAdmins[$AdminId] = @{ pub_xml = $pub; fetched_utc = [DateTime]::UtcNow }
+            return $pub
+        }
+    } catch {}
+    $script:TrustedTenantAdmins.Remove($AdminId) | Out-Null
+    return ""
+}
+
 function Execute-RemoteJob {
     param([string]$JobId, $JobDetails)
 
     $adminId = if ($JobDetails.admin_id) { $JobDetails.admin_id.ToString() } else { "" }
-    if ([string]::IsNullOrWhiteSpace($adminId) -or -not $script:PairedAdmins.ContainsKey($adminId)) {
-        Write-Host "[SECURITY] Rejected job $JobId from unpaired admin '$adminId'." -ForegroundColor Red
+    $adminPubXml = Resolve-TrustedAdminPubXml -AdminId $adminId
+    if ([string]::IsNullOrWhiteSpace($adminPubXml)) {
+        Write-Host "[SECURITY] Rejected job $JobId from unauthorized or revoked admin '$adminId'." -ForegroundColor Red
         return
     }
-    $adminPubXml = $script:PairedAdmins[$adminId]
 
     if (-not $JobDetails.envelope) {
         Write-Host "[SECURITY] Rejected unsigned plaintext job $JobId." -ForegroundColor Red
