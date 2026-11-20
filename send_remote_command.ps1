@@ -752,6 +752,109 @@ function Invoke-JavisLicenseActivation {
     }
 }
 
+function Disable-JavisConsoleQuickEdit {
+    <#
+    .SYNOPSIS
+    Disables Windows Console Quick Edit Mode so clicking the console window cannot freeze the agent process.
+    #>
+    try {
+        if (-not ("BBJavisConsoleGuard" -as [type])) {
+            Add-Type -TypeDefinition @"
+using System;
+using System.Runtime.InteropServices;
+public static class BBJavisConsoleGuard {
+    private const int STD_INPUT_HANDLE = -10;
+    private const uint ENABLE_QUICK_EDIT = 0x0040;
+    private const uint ENABLE_EXTENDED_FLAGS = 0x0080;
+    [DllImport("kernel32.dll", SetLastError = true)]
+    private static extern IntPtr GetStdHandle(int nStdHandle);
+    [DllImport("kernel32.dll", SetLastError = true)]
+    private static extern bool GetConsoleMode(IntPtr hConsoleHandle, out uint lpMode);
+    [DllImport("kernel32.dll", SetLastError = true)]
+    private static extern bool SetConsoleMode(IntPtr hConsoleHandle, uint dwMode);
+    public static bool DisableQuickEdit() {
+        IntPtr h = GetStdHandle(STD_INPUT_HANDLE);
+        if (h == IntPtr.Zero || h == new IntPtr(-1)) return false;
+        uint mode;
+        if (!GetConsoleMode(h, out mode)) return false;
+        mode &= ~ENABLE_QUICK_EDIT;
+        mode |= ENABLE_EXTENDED_FLAGS;
+        return SetConsoleMode(h, mode);
+    }
+}
+"@ -ErrorAction SilentlyContinue
+        }
+        return [BBJavisConsoleGuard]::DisableQuickEdit()
+    } catch {
+        return $false
+    }
+}
+
+function Invoke-JavisPowerShellWithTimeout {
+    <#
+    .SYNOPSIS
+    Executes a PowerShell script asynchronously with a hard timeout and periodic OnTick heartbeat callback.
+    #>
+    param(
+        [Parameter(Mandatory = $true)][string]$ScriptText,
+        [int]$TimeoutSec = 300,
+        [scriptblock]$OnTick = $null
+    )
+    if ($TimeoutSec -lt 1) { $TimeoutSec = 300 }
+    $ps = [System.Management.Automation.PowerShell]::Create()
+    $disposed = $false
+    try {
+        [void]$ps.AddScript($ScriptText)
+        $async = $ps.BeginInvoke()
+        $sw = [System.Diagnostics.Stopwatch]::StartNew()
+        while (-not $async.IsCompleted) {
+            if ($OnTick) {
+                $sig = & $OnTick
+                if ($sig -eq "ABORT") {
+                    try {
+                        $stopAsync = $ps.BeginStop($null, $null)
+                        $null = $stopAsync.AsyncWaitHandle.WaitOne(2000)
+                    } catch {}
+                    return @{
+                        stdout    = ""
+                        stderr    = "Command aborted by agent shutdown."
+                        exit_code = 130
+                        timed_out = $false
+                    }
+                }
+            }
+            if ($sw.Elapsed.TotalSeconds -ge $TimeoutSec) {
+                try {
+                    $stopAsync = $ps.BeginStop($null, $null)
+                    $stopped = $stopAsync.AsyncWaitHandle.WaitOne(2000)
+                    if ($stopped) { $ps.Dispose(); $disposed = $true }
+                } catch {}
+                return @{
+                    stdout    = ""
+                    stderr    = "Command timed out after ${TimeoutSec}s and was terminated automatically."
+                    exit_code = 124
+                    timed_out = $true
+                }
+            }
+            Start-Sleep -Milliseconds 150
+        }
+        $out = $ps.EndInvoke($async)
+        $outStr = ($out | Out-String).TrimEnd()
+        $errStr = (($ps.Streams.Error | ForEach-Object { $_.ToString() }) -join "`r`n").TrimEnd()
+        $exitCode = if ($ps.Streams.Error.Count -gt 0) { 1 } else { 0 }
+        return @{
+            stdout    = $outStr
+            stderr    = $errStr
+            exit_code = $exitCode
+            timed_out = $false
+        }
+    } finally {
+        if (-not $disposed) {
+            try { $ps.Dispose() } catch {}
+        }
+    }
+}
+
 # BB_JAVIS Native WebSocket-to-TCP Tunnel Library (Pure ASCII, PowerShell 5.1 / .NET 4.5+)
 
 function Get-JavisCscPath {
@@ -1533,7 +1636,8 @@ function Send-SignedJobAndWait {
 
     $sw = [System.Diagnostics.Stopwatch]::StartNew()
     $resultObj = $null
-    while ($sw.Elapsed.TotalSeconds -lt $WaitSec) {
+    $clientGraceSec = $WaitSec + 8
+    while ($sw.Elapsed.TotalSeconds -lt $clientGraceSec) {
         try {
             $raw = Invoke-GatewayHttp -Uri $jobUrl -Method "GET" -TimeoutSec 10
             if ($raw -and $raw.Trim() -ne "null") {

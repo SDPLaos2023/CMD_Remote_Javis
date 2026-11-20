@@ -738,6 +738,109 @@ function Invoke-JavisLicenseActivation {
     }
 }
 
+function Disable-JavisConsoleQuickEdit {
+    <#
+    .SYNOPSIS
+    Disables Windows Console Quick Edit Mode so clicking the console window cannot freeze the agent process.
+    #>
+    try {
+        if (-not ("BBJavisConsoleGuard" -as [type])) {
+            Add-Type -TypeDefinition @"
+using System;
+using System.Runtime.InteropServices;
+public static class BBJavisConsoleGuard {
+    private const int STD_INPUT_HANDLE = -10;
+    private const uint ENABLE_QUICK_EDIT = 0x0040;
+    private const uint ENABLE_EXTENDED_FLAGS = 0x0080;
+    [DllImport("kernel32.dll", SetLastError = true)]
+    private static extern IntPtr GetStdHandle(int nStdHandle);
+    [DllImport("kernel32.dll", SetLastError = true)]
+    private static extern bool GetConsoleMode(IntPtr hConsoleHandle, out uint lpMode);
+    [DllImport("kernel32.dll", SetLastError = true)]
+    private static extern bool SetConsoleMode(IntPtr hConsoleHandle, uint dwMode);
+    public static bool DisableQuickEdit() {
+        IntPtr h = GetStdHandle(STD_INPUT_HANDLE);
+        if (h == IntPtr.Zero || h == new IntPtr(-1)) return false;
+        uint mode;
+        if (!GetConsoleMode(h, out mode)) return false;
+        mode &= ~ENABLE_QUICK_EDIT;
+        mode |= ENABLE_EXTENDED_FLAGS;
+        return SetConsoleMode(h, mode);
+    }
+}
+"@ -ErrorAction SilentlyContinue
+        }
+        return [BBJavisConsoleGuard]::DisableQuickEdit()
+    } catch {
+        return $false
+    }
+}
+
+function Invoke-JavisPowerShellWithTimeout {
+    <#
+    .SYNOPSIS
+    Executes a PowerShell script asynchronously with a hard timeout and periodic OnTick heartbeat callback.
+    #>
+    param(
+        [Parameter(Mandatory = $true)][string]$ScriptText,
+        [int]$TimeoutSec = 300,
+        [scriptblock]$OnTick = $null
+    )
+    if ($TimeoutSec -lt 1) { $TimeoutSec = 300 }
+    $ps = [System.Management.Automation.PowerShell]::Create()
+    $disposed = $false
+    try {
+        [void]$ps.AddScript($ScriptText)
+        $async = $ps.BeginInvoke()
+        $sw = [System.Diagnostics.Stopwatch]::StartNew()
+        while (-not $async.IsCompleted) {
+            if ($OnTick) {
+                $sig = & $OnTick
+                if ($sig -eq "ABORT") {
+                    try {
+                        $stopAsync = $ps.BeginStop($null, $null)
+                        $null = $stopAsync.AsyncWaitHandle.WaitOne(2000)
+                    } catch {}
+                    return @{
+                        stdout    = ""
+                        stderr    = "Command aborted by agent shutdown."
+                        exit_code = 130
+                        timed_out = $false
+                    }
+                }
+            }
+            if ($sw.Elapsed.TotalSeconds -ge $TimeoutSec) {
+                try {
+                    $stopAsync = $ps.BeginStop($null, $null)
+                    $stopped = $stopAsync.AsyncWaitHandle.WaitOne(2000)
+                    if ($stopped) { $ps.Dispose(); $disposed = $true }
+                } catch {}
+                return @{
+                    stdout    = ""
+                    stderr    = "Command timed out after ${TimeoutSec}s and was terminated automatically."
+                    exit_code = 124
+                    timed_out = $true
+                }
+            }
+            Start-Sleep -Milliseconds 150
+        }
+        $out = $ps.EndInvoke($async)
+        $outStr = ($out | Out-String).TrimEnd()
+        $errStr = (($ps.Streams.Error | ForEach-Object { $_.ToString() }) -join "`r`n").TrimEnd()
+        $exitCode = if ($ps.Streams.Error.Count -gt 0) { 1 } else { 0 }
+        return @{
+            stdout    = $outStr
+            stderr    = $errStr
+            exit_code = $exitCode
+            timed_out = $false
+        }
+    } finally {
+        if (-not $disposed) {
+            try { $ps.Dispose() } catch {}
+        }
+    }
+}
+
 # BB_JAVIS Native WebSocket-to-TCP Tunnel Library (Pure ASCII, PowerShell 5.1 / .NET 4.5+)
 
 function Get-JavisCscPath {
@@ -1238,6 +1341,20 @@ if ($UninstallService.IsPresent) {
 
 $utf8NoBom = New-Object System.Text.UTF8Encoding($false)
 $isFixedService = ($Mode -eq "fix" -or $AsService.IsPresent)
+if (-not $isFixedService) {
+    $null = Disable-JavisConsoleQuickEdit
+}
+
+function Update-JavisConsoleTitle {
+    param([string]$State = "ONLINE")
+    if ($isFixedService) { return }
+    try {
+        $hbStr = if ($script:LastHeartbeatUtc -and $script:LastHeartbeatUtc -gt [DateTime]::MinValue) { $script:LastHeartbeatUtc.ToLocalTime().ToString("HH:mm:ss") } else { "--:--:--" }
+        $idleMin = if ($script:LastActivityUtc) { [int][Math]::Floor(([DateTime]::UtcNow - $script:LastActivityUtc).TotalMinutes) } else { 0 }
+        $idleInfo = if ($IdleTimeoutMinutes -gt 0) { " | Idle: ${idleMin}m/$([int]$IdleTimeoutMinutes)m" } else { "" }
+        [Console]::Title = "BB_JAVIS [PIN: $($script:DeviceId) | $State | HB: $hbStr$idleInfo]"
+    } catch {}
+}
 $serviceConfigDir = Join-Path $env:ProgramData "BB_Javis"
 $serviceConfigFile = Join-Path $serviceConfigDir "service_config.json"
 $deviceKeyFile = Join-Path $serviceConfigDir "device_key.dpapi"
@@ -1505,26 +1622,32 @@ function Invoke-DevicePairing {
             throw "Unable to reserve a unique 4-digit pairing PIN after 10 attempts."
         }
 
+        $copiedPin = $false
         if ($isFixedService) {
             [System.IO.File]::WriteAllText($pairingBannerFile, "PAIRING_PIN=$code`r`nDEVICE_ID=$($script:DeviceId)`r`nCREATED_UTC=$([DateTime]::UtcNow.ToString('o'))", $utf8NoBom)
+        } else {
+            try { Set-Clipboard -Value $code; $copiedPin = $true } catch {}
         }
 
         Write-Host "======================================================================" -ForegroundColor DarkCyan
         Write-Host "             BB_JAVIS ZERO-TRUST DEVICE PAIRING REQUIRED              " -ForegroundColor Yellow
         Write-Host "======================================================================" -ForegroundColor DarkCyan
         Write-Host "  -> Remote PIN   : " -NoNewline -ForegroundColor Gray
-        Write-Host "[ $code ]" -ForegroundColor Green
+        Write-Host "[ $code ]" -NoNewline -ForegroundColor Green
+        if ($copiedPin) { Write-Host "  (Copied to clipboard - just press Ctrl+V)" -ForegroundColor DarkGray } else { Write-Host "" }
         Write-Host "  -> Machine Name : $($script:DeviceCustomName) ($env:COMPUTERNAME)" -ForegroundColor White
         Write-Host "  -> Run on Dev   : send_remote_command.bat -Pair $code" -ForegroundColor Yellow
         if (-not $isFixedService -and $IdleTimeoutMinutes -gt 0) {
             Write-Host "  -> Auto-Close   : Idle timeout $IdleTimeoutMinutes min (temp mode)" -ForegroundColor Gray
         }
         Write-Host "======================================================================" -ForegroundColor DarkCyan
+        Update-JavisConsoleTitle -State "WAIT-PAIR"
 
         $expiredPin = $false
         while ($true) {
             Start-Sleep -Seconds 2
             Invoke-IdleTimeoutShutdownIfExpired
+            Update-JavisConsoleTitle -State "WAIT-PAIR"
             try {
                 $statusRaw = Invoke-GatewayHttp -Uri ($BaseUrl + "pairing/status/$code") -Method "GET" -TimeoutSec 10 -Key "" -ExtraHeaders @{ "X-Pairing-Secret" = $pairSecret }
                 $statusObj = $statusRaw | ConvertFrom-Json
@@ -1952,19 +2075,23 @@ function Execute-RemoteJob {
             $resData.stdout = "Uploaded $($bytes.Length) bytes to $rp."
         }
         else {
-            # PowerShell Mode (Runspace execution)
-            $ps = [System.Management.Automation.PowerShell]::Create()
-            try {
-                [void]$ps.AddScript($payload.command.ToString())
-                $out = $ps.Invoke()
-                $outStr = ($out | Out-String).TrimEnd()
-                $errStr = (($ps.Streams.Error | ForEach-Object { $_.ToString() }) -join "`r`n").TrimEnd()
-                $resData.stdout = $outStr
-                $resData.stderr = $errStr
-                if ($ps.Streams.Error.Count -gt 0) { $exitCode = 1 }
-            } finally {
-                $ps.Dispose()
+            # PowerShell Mode (Async Runspace execution with hard timeout + live heartbeat)
+            $jobTimeoutSec = 300
+            if ($JobDetails.timeout_sec) {
+                try { $jobTimeoutSec = [Math]::Max(10, [Math]::Min(1800, [int]$JobDetails.timeout_sec)) } catch {}
             }
+            Update-JavisConsoleTitle -State "RUNNING"
+            $psRes = Invoke-JavisPowerShellWithTimeout -ScriptText $payload.command.ToString() -TimeoutSec $jobTimeoutSec -OnTick {
+                if ($script:isExiting) { return "ABORT" }
+                $script:LastActivityUtc = [DateTime]::UtcNow
+                if (([DateTime]::UtcNow - $script:LastHeartbeatUtc).TotalSeconds -ge 28) {
+                    Update-DeviceHeartbeat -Status "online"
+                    Update-JavisConsoleTitle -State "RUNNING"
+                }
+            }
+            $resData.stdout = $psRes.stdout
+            $resData.stderr = $psRes.stderr
+            $exitCode = [int]$psRes.exit_code
         }
     } catch {
         $exitCode = 1
@@ -2007,16 +2134,39 @@ if (-not $isFixedService -and $IdleTimeoutMinutes -gt 0) {
 }
 Write-Host "======================================================================" -ForegroundColor DarkCyan
 
-$lastProcessedJob = ""
+$script:lastProcessedJob = ""
+
+function Invoke-PollPendingJobsOnce {
+    try {
+        $jsonRaw = Invoke-GatewayHttp -Uri ($BaseUrl + "jobs/$($script:DeviceId).json") -Method "GET" -TimeoutSec 5
+        if ($jsonRaw -and $jsonRaw.Trim() -ne "null" -and $jsonRaw.Trim().StartsWith("{")) {
+            $jobs = ConvertFrom-Json -InputObject $jsonRaw.Trim() -ErrorAction SilentlyContinue
+            if ($jobs -is [System.Management.Automation.PSCustomObject]) {
+                foreach ($prop in $jobs.PSObject.Properties) {
+                    if ($prop.Value -and $prop.Value.status -eq "pending" -and $prop.Value.envelope -and $prop.Name -ne $script:lastProcessedJob) {
+                        Execute-RemoteJob -JobId $prop.Name -JobDetails $prop.Value
+                        $script:lastProcessedJob = $prop.Name
+                        Update-DeviceHeartbeat -Status "online"
+                        Update-JavisConsoleTitle -State "ONLINE"
+                        break
+                    }
+                }
+            }
+        }
+    } catch {}
+}
+
 try {
     while (-not $script:isExiting) {
         Close-ExpiredTunnels
         Invoke-IdleTimeoutShutdownIfExpired
+        Update-JavisConsoleTitle -State "ONLINE"
         if ($script:restartRequested) {
             $script:restartRequested = $false
             [GC]::Collect()
         }
 
+        $sseWasStale = $false
         try {
             $sseTimeoutMs = 35000
             if (-not $isFixedService -and $IdleTimeoutMinutes -gt 0 -and $script:ActiveTunnels.Count -eq 0) {
@@ -2034,19 +2184,44 @@ try {
 
             $response = $request.GetResponse()
             $stream = $response.GetResponseStream()
+            try { $stream.ReadTimeout = $sseTimeoutMs } catch {}
             $reader = New-Object System.IO.StreamReader($stream, $utf8NoBom)
             $dataBuffer = [System.Text.StringBuilder]::new()
+            $lastSseRxUtc = [DateTime]::UtcNow
+            $sseStaleSec = 45
 
-            while (-not $reader.EndOfStream -and -not $script:isExiting) {
+            while (-not $script:isExiting) {
                 Close-ExpiredTunnels
                 Invoke-IdleTimeoutShutdownIfExpired
                 if (([DateTime]::UtcNow - $script:LastHeartbeatUtc).TotalSeconds -ge 28) {
                     Update-DeviceHeartbeat -Status "online"
                 }
+                Update-JavisConsoleTitle -State "ONLINE"
 
-                $line = $reader.ReadLine()
-                Invoke-IdleTimeoutShutdownIfExpired
+                $readTask = $reader.ReadLineAsync()
+                $lineReady = $false
+                while (-not $script:isExiting) {
+                    if ($readTask.Wait(1500)) {
+                        $lineReady = $true
+                        break
+                    }
+                    Close-ExpiredTunnels
+                    Invoke-IdleTimeoutShutdownIfExpired
+                    if (([DateTime]::UtcNow - $script:LastHeartbeatUtc).TotalSeconds -ge 28) {
+                        Update-DeviceHeartbeat -Status "online"
+                    }
+                    Update-JavisConsoleTitle -State "ONLINE"
+                    if (([DateTime]::UtcNow - $lastSseRxUtc).TotalSeconds -ge $sseStaleSec) {
+                        $sseWasStale = $true
+                        try { $request.Abort() } catch {}
+                        break
+                    }
+                }
+                if (-not $lineReady) { break }
+                $line = $readTask.Result
                 if ($null -eq $line) { break }
+                $lastSseRxUtc = [DateTime]::UtcNow
+                Invoke-IdleTimeoutShutdownIfExpired
 
                 if ($line.StartsWith("data: ")) {
                     $null = $dataBuffer.AppendLine($line.Substring(6))
@@ -2074,11 +2249,12 @@ try {
                                     }
                                 }
                             }
-                            if ($targetJobId -and $targetJobId -ne $lastProcessedJob) {
+                            if ($targetJobId -and $targetJobId -ne $script:lastProcessedJob) {
                                 try { $reader.Close(); $stream.Close(); $response.Close(); $request.Abort() } catch {}
                                 Execute-RemoteJob -JobId $targetJobId -JobDetails $targetJobDetails
-                                $lastProcessedJob = $targetJobId
+                                $script:lastProcessedJob = $targetJobId
                                 Update-DeviceHeartbeat -Status "online"
+                                Update-JavisConsoleTitle -State "ONLINE"
                                 break
                             }
                         }
@@ -2086,28 +2262,17 @@ try {
                 }
             }
             try { $reader.Close(); $stream.Close(); $response.Close(); $request.Abort() } catch {}
+            if ($sseWasStale -and -not $script:isExiting) {
+                Invoke-PollPendingJobsOnce
+            }
         } catch {
             Close-ExpiredTunnels
             Invoke-IdleTimeoutShutdownIfExpired
             if (([DateTime]::UtcNow - $script:LastHeartbeatUtc).TotalSeconds -ge 28) {
                 Update-DeviceHeartbeat -Status "online"
             }
-            try {
-                $jsonRaw = Invoke-GatewayHttp -Uri ($BaseUrl + "jobs/$($script:DeviceId).json") -Method "GET" -TimeoutSec 5
-                if ($jsonRaw -and $jsonRaw.Trim() -ne "null" -and $jsonRaw.Trim().StartsWith("{")) {
-                    $jobs = ConvertFrom-Json -InputObject $jsonRaw.Trim() -ErrorAction SilentlyContinue
-                    if ($jobs -is [System.Management.Automation.PSCustomObject]) {
-                        foreach ($prop in $jobs.PSObject.Properties) {
-                            if ($prop.Value -and $prop.Value.status -eq "pending" -and $prop.Value.envelope -and $prop.Name -ne $lastProcessedJob) {
-                                Execute-RemoteJob -JobId $prop.Name -JobDetails $prop.Value
-                                $lastProcessedJob = $prop.Name
-                                Update-DeviceHeartbeat -Status "online"
-                                break
-                            }
-                        }
-                    }
-                }
-            } catch {}
+            Update-JavisConsoleTitle -State "RECONNECT"
+            Invoke-PollPendingJobsOnce
             Start-Sleep -Seconds $PollIntervalSec
         }
     }
